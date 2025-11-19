@@ -1,4 +1,4 @@
-# onDocs (온닥스)
+# onDocs
 
 > 100% Offline, Edge AI Document Analyzer
 
