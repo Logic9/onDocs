@@ -158,9 +158,9 @@ async def chat(request: ChatRequest):
             retriever = vector_store.as_retriever(
                 search_type="mmr",
                 search_kwargs={
-                    "k": 10,           
+                    "k": 6,           
                     "fetch_k": 20,     
-                    "lambda_mult": 0.3 
+                    "lambda_mult": 0.5
                 }
             )
             docs = await retriever.ainvoke(request.question)
@@ -183,13 +183,13 @@ async def chat(request: ChatRequest):
             {context_text}
             """
             
-            llm = ChatOllama(model=MODEL_NAME, temperature=0)
+            llm = ChatOllama(model=MODEL_NAME, temperature=0, num_ctx=4096, keep_alive="60m")
 
             full_messages = [("system", system_prompt)] 
             
             # 최근 10개의 대화 기록만 사용하여 속도 최적화 (Windowing)
             # 프런트엔드에서 전체를 보내도 여기서 잘라서 사용
-            recent_history = request.history[-10:] 
+            recent_history = request.history[-6:] 
             
             for msg in recent_history:
                 lc_role = msg.role
