@@ -13,6 +13,8 @@ from langchain_ollama import ChatOllama, OllamaEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain.retrievers import EnsembleRetriever
+from langchain_community.retrievers import BM25Retriever
 
 # --- 설정 ---
 UPLOAD_DIR = "./temp"
@@ -34,8 +36,8 @@ class MatryoshkaOllamaEmbeddings(OllamaEmbeddings):
         return [emb[:self.dimensions] for emb in embeddings]
 
     def embed_query(self, text: str) -> List[float]:
-        embedding = super().embed_query(text)
-        return embedding[:self.dimensions]
+        instruction = "문서 분석:"
+        return super().embed_query(instruction + text)[:self.dimensions]
     
     # 비동기(Async) 메서드 오버라이딩
     async def aembed_documents(self, texts: List[str]) -> List[List[float]]:
@@ -49,7 +51,7 @@ class MatryoshkaOllamaEmbeddings(OllamaEmbeddings):
 # 임베딩 모델: EmbeddingGemma (Ollama QAT 버전)
 EMBEDDING_MODEL = MatryoshkaOllamaEmbeddings(
     model="embeddinggemma:300m-qat-q8_0",
-    dimensions=256 
+    dimensions=128 
 )
 
 app = FastAPI(title="onDocs API", description="High Performance Offline RAG")
@@ -65,6 +67,7 @@ app.add_middleware(
 
 # --- 전역 변수 ---
 vector_store = None
+bm25_retriever = None
 processing_status: Dict[str, str] = {}
 
 # --- 데이터 모델 ---
@@ -78,7 +81,7 @@ class ChatRequest(BaseModel):
 
 # --- 백그라운드 작업 함수 ---
 def process_document(file_path: str, file_ext: str, filename: str):
-    global vector_store, processing_status
+    global vector_store, bm25_retriever, processing_status
     
     try:
         processing_status[filename] = "processing"
@@ -103,6 +106,9 @@ def process_document(file_path: str, file_ext: str, filename: str):
 
         # 임베딩 및 벡터 저장소 생성
         vector_store = FAISS.from_documents(documents=splits, embedding=EMBEDDING_MODEL)
+        
+        bm25_retriever = BM25Retriever.from_documents(splits)
+        bm25_retriever.k = 5  
         
         processing_status[filename] = "completed"
         
@@ -146,7 +152,7 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
-    global vector_store
+    global vector_store, bm25_retriever
     
     async def generate():
         if not vector_store:
@@ -155,30 +161,33 @@ async def chat(request: ChatRequest):
     
         try:
             # MMR 검색 설정
-            retriever = vector_store.as_retriever(
+            faiss_retriever = vector_store.as_retriever(
                 search_type="mmr",
                 search_kwargs={
-                    "k": 6,           
+                    "k": 7,           
                     "fetch_k": 20,     
-                    "lambda_mult": 0.5
+                    "lambda_mult": 0.5 
                 }
             )
-            docs = await retriever.ainvoke(request.question)
+
+            ensemble_retriever = EnsembleRetriever(
+                retrievers=[bm25_retriever, faiss_retriever],
+                weights=[0.4, 0.6] 
+            )
+
+            docs = await ensemble_retriever.ainvoke(request.question)
             context_text = "\n\n".join([doc.page_content for doc in docs])
             
             # 시스템 프롬프트
             system_prompt = f"""
-            당신은 제공된 [Context]를 바탕으로 사용자 질문에 대해 가장 관련성 높은 사실만을 추출하여 답변하는 AI 문서 분석기 'onDocs AI'입니다.
+            당신은 'onDocs AI'입니다. 오직 아래 제공된 [Context]만을 근거로 답변해야 합니다.
 
-            [지침]
-            1. 답변의 모든 내용은 오직 [Context] 내의 정보만을 사용해야 합니다.
-            2. 답변 생성 원칙:
-               - [Context]에 질문에 대한 정보가 **포함되어 있다면**, 다른 서론 없이 바로 답변의 본론을 시작하세요.
-               - [Context]가 **질문과 완전히 무관하거나 비어 있다면**에만 한하여, "문서에 해당 내용이 명시되어 있지 않습니다"라고 간결하게 답하세요.
-               - **절대 '죄송합니다', '제가 앞서 제공한 정보에는' 같은 불필요한 사과나 모순된 문장을 사용하지 마세요.**
-            3. 답변은 서론이나 군더더기 없이 바로 본론부터 시작하고, Markdown 형식을 활용하여 질문 의도에 가장 적절한 형식(목록, 표 등)으로 구성하세요.
-            4. 사용자가 다른 언어로 질문하면 해당 언어로 답변하세요.
-            
+            [강력한 제약사항]
+            1. [Context]에 명시된 내용이 아니라면, 절대로 답변을 지어내지 마세요.
+            2. 정보가 부족하거나 없으면 무조건 "문서에 해당 내용이 없습니다."라고만 답하세요.
+            3. 사용자의 질문이 [Context]와 관련이 없다면 답변을 거부하세요.
+            4. 자신의 지식(Pre-trained knowledge)을 사용하지 마세요.
+
             [Context]:
             {context_text}
             """
@@ -187,7 +196,7 @@ async def chat(request: ChatRequest):
 
             full_messages = [("system", system_prompt)] 
             
-            # 최근 10개의 대화 기록만 사용하여 속도 최적화 (Windowing)
+            # 최근 6개의 대화 기록만 사용하여 속도 최적화 (Windowing)
             # 프런트엔드에서 전체를 보내도 여기서 잘라서 사용
             recent_history = request.history[-6:] 
             
