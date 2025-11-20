@@ -78,8 +78,8 @@ export default function Home() {
           clearInterval(pollInterval);
           setIsUploading(false);
           setStatusMessage("");
-          setMessages((prev) => [
-            ...prev,
+
+          setMessages([
             {
               role: "bot",
               content: `✅ **${file.name}** 분석 완료!\n이제 질문하셔도 됩니다.`,
@@ -119,10 +119,22 @@ export default function Home() {
     setIsLoading(true);
 
     try {
+      // 대화 기록을 구성: 첫 메시지 제외하고 모든 메시지를 전송
+      const conversationHistory = messages
+        .slice(1) // 첫 메시지 (onDocs AI입니다)는 제외
+        .map((msg) => ({
+          // 백엔드의 Message 모델(role: assistant/human)에 맞게 매핑
+          role: msg.role === "bot" ? "assistant" : "human",
+          content: msg.content,
+        }));
+
       const response = await fetch(`${API_URL}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: userMessage }),
+        body: JSON.stringify({
+          question: userMessage,
+          history: conversationHistory, // 모든 대화 기록 전송
+        }),
       });
 
       if (!response.body) return;
@@ -213,7 +225,7 @@ export default function Home() {
         </div>
       </header>
 
-      {/*  채팅 영역 래퍼 (상대 좌표 기준점) */}
+      {/* 채팅 영역 래퍼 (상대 좌표 기준점) */}
       <div className="flex-1 relative overflow-hidden">
         {/* 실제 스크롤 되는 채팅 영역 */}
         <div
