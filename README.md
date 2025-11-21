@@ -12,5 +12,14 @@
 ## 🛠 Tech Stack
 
 - **Core AI:** Ollama (`gemma3n:e2b`)
-- **Backend:** FastAPI, LangChain, FAISS
-- **Frontend:** Next.js 14, Tailwind CSS
+- **Backend:**
+  - FastAPI
+  - LangChain (langchain, langchain_ollama, langchain_huggingface, langchain_community, langchain_core, langchain_text_splitters)
+  - FAISS
+  - HuggingFace Embeddings (`jhgan/ko-sroberta-multitask`)
+  - BM25Retriever
+  - Kiwi 형태소 분석기 (`kiwipiepy`)
+  - PyMuPDF4LLM (PDF → Markdown 변환)
+  - scikit-learn (KMeans 클러스터링)
+  - numpy
+- **Frontend:** Next.js, Tailwind CSS
