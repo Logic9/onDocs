@@ -1,6 +1,7 @@
 import os
 import shutil
 import uuid
+import re
 from typing import List, Dict
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
@@ -8,64 +9,43 @@ from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-# --- LangChain Imports ---
-from langchain_ollama import ChatOllama, OllamaEmbeddings
+# --- LangChain & AI Imports ---
+from langchain_ollama import ChatOllama
+from langchain_huggingface import HuggingFaceEmbeddings 
 from langchain_community.vectorstores import FAISS
-from langchain_community.document_loaders import PyPDFLoader, TextLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.document_loaders import TextLoader
+from langchain_core.documents import Document 
+from langchain_text_splitters import RecursiveCharacterTextSplitter, MarkdownTextSplitter
 from langchain.retrievers import EnsembleRetriever
 from langchain_community.retrievers import BM25Retriever
 from langchain_community.cache import InMemoryCache
 from langchain.globals import set_llm_cache
-# 메모리 내 캐시 활성화
-set_llm_cache(InMemoryCache())
-
 from langchain_core.prompts import PromptTemplate
 from langchain.chains.summarize import load_summarize_chain
-from langchain.docstore.document import Document
+from kiwipiepy import Kiwi
 from sklearn.cluster import KMeans
 import numpy as np
+import pymupdf4llm 
 
+set_llm_cache(InMemoryCache())
 
 # --- 설정 ---
 UPLOAD_DIR = "./temp"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-MODEL_NAME = "gemma3n:e2b"
+MODEL_NAME = "gemma3n:e2b" 
 
-# MRL을 적용한 커스텀 임베딩 클래스
-class MatryoshkaOllamaEmbeddings(OllamaEmbeddings):
-    dimensions: int = 768 
-
-    def __init__(self, model: str, dimensions: int = 768, **kwargs):
-        super().__init__(model=model, **kwargs)
-        self.dimensions = dimensions
-
-    # 동기(Sync) 메서드 오버라이딩
-    def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        embeddings = super().embed_documents(texts)
-        return [emb[:self.dimensions] for emb in embeddings]
-
-    def embed_query(self, text: str) -> List[float]:
-        instruction = "문서 분석:"
-        return super().embed_query(instruction + text)[:self.dimensions]
-    
-    # 비동기(Async) 메서드 오버라이딩
-    async def aembed_documents(self, texts: List[str]) -> List[List[float]]:
-        embeddings = await super().aembed_documents(texts)
-        return [emb[:self.dimensions] for emb in embeddings]
-
-    async def aembed_query(self, text: str) -> List[float]:
-        embedding = await super().aembed_query(text)
-        return embedding[:self.dimensions]
-
-# 임베딩 모델: EmbeddingGemma (Ollama QAT 버전)
-EMBEDDING_MODEL = MatryoshkaOllamaEmbeddings(
-    model="embeddinggemma:300m-qat-q8_0",
-    dimensions=128 
+EMBEDDING_MODEL = HuggingFaceEmbeddings(
+    model_name="jhgan/ko-sroberta-multitask",
+    model_kwargs={'device': 'cpu'}, 
+    encode_kwargs={'normalize_embeddings': True, 'batch_size': 16} 
 )
 
-app = FastAPI(title="onDocs API", description="High Performance Offline RAG")
+kiwi = Kiwi()
+def korean_tokenizer(text: str) -> List[str]:
+    return [token.form for token in kiwi.tokenize(text)]
+
+app = FastAPI(title="onDocs API", description="General Purpose Precision RAG")
 
 origins = ["*"]
 app.add_middleware(
@@ -76,12 +56,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- 전역 변수 ---
 vector_store = None
 bm25_retriever = None
 processing_status: Dict[str, str] = {}
+LATEST_DOC_HEADER = "" 
 
-# --- 데이터 모델 ---
 class Message(BaseModel):
     role: str
     content: str
@@ -93,44 +72,41 @@ class ChatRequest(BaseModel):
 class SummarizeRequest(BaseModel):
     filename: str
 
-# --- 백그라운드 작업 함수 ---
 def process_document(file_path: str, file_ext: str, filename: str):
-    global vector_store, bm25_retriever, processing_status
+    global vector_store, bm25_retriever, processing_status, LATEST_DOC_HEADER
     
     try:
         processing_status[filename] = "processing"
         
-        if file_ext == ".pdf":
-            loader = PyPDFLoader(file_path)
-        elif file_ext in [".txt", ".md"]:
+        raw_docs = []
+        
+        if file_ext == ".pdf": 
+            md_text = pymupdf4llm.to_markdown(file_path)
+            raw_docs = [Document(page_content=md_text, metadata={"source": file_path})]
+            text_splitter = MarkdownTextSplitter(chunk_size=1200, chunk_overlap=300)
+            
+        elif file_ext in [".txt", ".md"]: 
             loader = TextLoader(file_path, encoding="utf-8")
+            raw_docs = loader.load()
+            text_splitter = RecursiveCharacterTextSplitter(chunk_size=1200, chunk_overlap=300)
         else:
             processing_status[filename] = "failed"
             return
 
-        docs = loader.load()
-        
-        # 텍스트 분할 설정
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=500, 
-            chunk_overlap=50,
-            separators=["\n", "\n\n", " ", ""] 
-        )
-        splits = text_splitter.split_documents(docs)
+        splits = text_splitter.split_documents(raw_docs)
 
-        # 임베딩 및 벡터 저장소 생성
+        if len(splits) > 0:
+            LATEST_DOC_HEADER = splits[0].page_content
+                   
         vector_store = FAISS.from_documents(documents=splits, embedding=EMBEDDING_MODEL)
-        
-        bm25_retriever = BM25Retriever.from_documents(splits)
-        bm25_retriever.k = 3
+        bm25_retriever = BM25Retriever.from_documents(splits, preprocess_func=korean_tokenizer)
+        bm25_retriever.k = 5 
         
         processing_status[filename] = "completed"
         
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"❌ Error processing document: {e}")
         processing_status[filename] = "failed"
-
-# --- API 엔드포인트 ---
 
 @app.get("/")
 def health_check():
@@ -144,7 +120,6 @@ def get_status(filename: str):
 @app.post("/upload")
 async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     global processing_status
-    
     file_id = str(uuid.uuid4())
     file_ext = os.path.splitext(file.filename)[1].lower()
     file_path = os.path.join(UPLOAD_DIR, f"{file_id}_{file.filename}")
@@ -168,84 +143,63 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
 async def summarize_document(request: SummarizeRequest):
     filename = request.filename
     file_path = None
-    
     for f in os.listdir(UPLOAD_DIR):
         if f.endswith(filename):
             file_path = os.path.join(UPLOAD_DIR, f)
-            break
-            
-    if not file_path:
-        raise HTTPException(status_code=404, detail="파일을 찾을 수 없습니다.")
+            break   
+    if not file_path: raise HTTPException(status_code=404, detail="파일을 찾을 수 없습니다.")
 
     try:
-        # 문서 로드 & 분할
         ext = os.path.splitext(filename)[1].lower()
-        if ext == ".pdf":
-            loader = PyPDFLoader(file_path)
-        else:
+        if ext == ".pdf": 
+            md_text = pymupdf4llm.to_markdown(file_path)
+            raw_docs = [Document(page_content=md_text, metadata={"source": file_path})]
+            text_splitter = MarkdownTextSplitter(chunk_size=2000, chunk_overlap=200)
+        else: 
             loader = TextLoader(file_path, encoding="utf-8")
-        
-        raw_docs = loader.load()
-        
-        # 문서를 1000자 단위로 큼직하게 자름
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000, chunk_overlap=200
-        )
+            raw_docs = loader.load()
+            text_splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=200)
+            
         docs = text_splitter.split_documents(raw_docs)
         
-        # 내용이 많을 때만 '클러스터링' 적용
-        if len(docs) > 15:
-            print(f"클러스터링 요약 시작 (전체 {len(docs)}개 중 핵심 추출)")
-            
-            vectors = await EMBEDDING_MODEL.aembed_documents([d.page_content for d in docs])
-            
-            num_clusters = max(5, int(len(docs) * 0.2)) 
+        if len(docs) > 10:
+            vectors = EMBEDDING_MODEL.embed_documents([d.page_content for d in docs])
+            vectors = np.array(vectors)
+            num_clusters = 5
             kmeans = KMeans(n_clusters=num_clusters, random_state=42).fit(vectors)
-            
             closest_indices = []
             for i in range(num_clusters):
                 distances = np.linalg.norm(vectors - kmeans.cluster_centers_[i], axis=1)
                 closest_index = np.argmin(distances)
                 closest_indices.append(closest_index)
-            
-            selected_indices = sorted(closest_indices)
-            selected_docs = [docs[i] for i in selected_indices]
-            print(f"{len(docs)}개 중 {len(selected_docs)}개의 핵심 문단만 선별 완료")
+            selected_docs = [docs[i] for i in sorted(closest_indices)]
         else:
             selected_docs = docs
 
-        # 선별된 내용으로 요약 수행
-        summary_llm = ChatOllama(
-            model=MODEL_NAME, 
-            temperature=0,
-            num_ctx=8192, 
-            keep_alive="60m"
-        )
+        summary_llm = ChatOllama(model=MODEL_NAME, temperature=0, num_ctx=4096)
         
         summary_template = """
-        다음 텍스트의 핵심 내용을 파악하여 한국어로 요약해 주세요.
-        내용의 흐름이 자연스럽게 이어지도록 3~5문단으로 정리해 주세요.
+        [지시]
+        문서를 한국어로 3문단 이내로 요약해 줘.
+        표(Table)나 주요 일정(날짜)이 있다면 그 내용을 반드시 포함해서 정리해.
         
-        [텍스트]:
+        [텍스트]
         "{text}"
         
-        [전체 요약]:"""
+        [요약]
+        """
         SUMMARY_PROMPT = PromptTemplate.from_template(summary_template)
-        
-        # prompt 파라미터에 한국어 템플릿 전달
         chain = load_summarize_chain(summary_llm, chain_type="stuff", prompt=SUMMARY_PROMPT)
         
         summary_result = await chain.ainvoke(selected_docs)
-        
         return {"summary": summary_result["output_text"]}
-
     except Exception as e:
-        print(f"요약 실패: {e}")
+        print(f"Summarize Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
-    global vector_store, bm25_retriever
+    global vector_store, bm25_retriever, LATEST_DOC_HEADER
     
     async def generate():
         if not vector_store:
@@ -253,52 +207,62 @@ async def chat(request: ChatRequest):
             return
     
         try:
-            # 일반 유사도 검색 사용
-            faiss_retriever = vector_store.as_retriever(
-                search_type="similarity",
-                search_kwargs={"k": 4} 
-            )
-
+            faiss_retriever = vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 5})
+            bm25_retriever.k = 5
             ensemble_retriever = EnsembleRetriever(
                 retrievers=[bm25_retriever, faiss_retriever],
-                weights=[0.4, 0.6] 
+                weights=[0.2, 0.8] 
             )
-
-            docs = await ensemble_retriever.ainvoke(request.question)
-            context_text = "\n\n".join([doc.page_content for doc in docs])
+            retrieved_docs = await ensemble_retriever.ainvoke(request.question)
             
-            # 시스템 프롬프트
+            top_docs = retrieved_docs[:2] 
+
+            # Header Injection
+            combined_docs_content = []
+            header_included = False
+            for doc in top_docs:
+                if doc.page_content == LATEST_DOC_HEADER:
+                    header_included = True
+                combined_docs_content.append(doc.page_content)
+            
+            if not header_included and LATEST_DOC_HEADER:
+                combined_docs_content.insert(0, LATEST_DOC_HEADER)
+                print("📌 [System] Header 강제 주입됨")
+
+            context_text = "\n---\n".join(combined_docs_content)
+        
             system_prompt = f"""
-            당신은 'onDocs AI'입니다. 오직 아래 제공된 [Context]만을 근거로 답변해야 합니다.
-
-            [강력한 제약사항]
-            1. [Context]에 명시된 내용이 아니라면, 절대로 답변을 지어내지 마세요.
-            2. 정보가 부족하거나 없으면 무조건 "문서에 해당 내용이 없습니다."라고만 답하세요.
-            3. 사용자의 질문이 [Context]와 관련이 없다면 답변을 거부하세요.
-            4. 자신의 지식(Pre-trained knowledge)을 사용하지 마세요.
-
-            [Context]:
+            [지시]
+            너는 문서를 정밀하게 분석하는 AI야. 아래 [문서 내용]을 보고 질문에 답해.
+            
+            [분석 핵심 규칙]
+            1. **레이블(Label) 매칭:** 사용자가 특정 정보를 물어보면, 문서에서 그 단어(키워드)를 먼저 찾아.
+               - 예: '공개 일자'를 물으면 -> 문서에서 '공개'라는 단어를 찾고 -> 그 **바로 옆이나 아래**에 있는 날짜를 답해.
+               - 예: '출원 일자'를 물으면 -> 문서에서 '출원'이라는 단어를 찾고 -> 그 근처의 날짜를 답해.
+            
+            2. **유사한 정보 구분:**
+               - 문서에 여러 개의 날짜나 이름이 섞여 있을 때, 질문한 키워드와 **물리적으로 가장 가까운** 값을 선택해야 해. 절대 추측하지 마.
+            
+            3. **동의어 처리:**
+               - '제출'='신청'='접수' (같은 의미로 해석)
+               - '마감'='종료'='까지'
+            
+            [문서 내용]
             {context_text}
             """
             
-            llm = ChatOllama(model=MODEL_NAME, temperature=0, num_ctx=2048, keep_alive="60m")
+            llm = ChatOllama(
+                model=MODEL_NAME, 
+                temperature=0, 
+                num_ctx=4096, 
+                num_thread=4,
+                keep_alive="60m"
+            )
 
             full_messages = [("system", system_prompt)] 
-            
-            # 최근 6개의 대화 기록만 사용하여 속도 최적화 (Windowing)
-            # 프런트엔드에서 전체를 보내도 여기서 잘라서 사용
-            recent_history = request.history[-6:] 
-            
-            for msg in recent_history:
-                lc_role = msg.role
-                if msg.role == 'assistant':
-                    lc_role = 'ai'
-                elif msg.role == 'human':
-                    lc_role = 'human'
-                elif msg.role == 'system':
-                    lc_role = 'system'
-
-                full_messages.append((lc_role, msg.content))
+            for msg in request.history[-2:]:
+                role_map = {'assistant': 'ai', 'human': 'human', 'user': 'human', 'system': 'system'}
+                full_messages.append((role_map.get(msg.role, 'human'), msg.content))
             
             full_messages.append(("human", request.question))
             
@@ -307,7 +271,8 @@ async def chat(request: ChatRequest):
                     yield chunk.content
 
         except Exception as e:
-            yield "❌ 서버 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
+            print(f"Chat Error: {e}")
+            yield f"❌ 오류 발생: {str(e)}"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 

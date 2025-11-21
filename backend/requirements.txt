@@ -2,17 +2,21 @@ fastapi
 uvicorn
 pydantic
 python-multipart
+shutil
+uuid
+numpy
+scikit-learn
+kiwipiepy
+pymupdf4llm
 langchain
-langchain-community
-langchain-ollama
-langchain-huggingface
-sentence-transformers
+langchain_ollama
+langchain_huggingface
+langchain_community
+langchain_core
+langchain_text_splitters
+huggingface-hub
 faiss-cpu
-torch
-transformers
-# 문서 로딩용
-PyPDF2
-# CORS
-starlette
-# 검색 쿼리용
-rank_bm25
+
+# 아래는 선택적으로 필요할 수 있음 (환경에 따라)
+# torch
+# transformers

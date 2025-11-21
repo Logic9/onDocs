@@ -333,7 +333,7 @@ export default function Home() {
                         <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-indigo-500 rounded-full animate-ping opacity-75"></span>
                       </div>
                       <span className="font-medium animate-pulse">
-                        전체 문서를 분석하고 있습니다...
+                        전체 문서를 요약하고 있습니다...
                       </span>
                     </div>
                   ) : /* 일반 텍스트 메시지 (봇) */
