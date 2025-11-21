@@ -11,6 +11,7 @@ import {
   Loader2,
   Cpu,
   CheckCircle2,
+  FileText,
 } from "lucide-react";
 
 const API_URL = "http://localhost:8000";
@@ -96,6 +97,51 @@ export default function Home() {
       alert("업로드 요청 실패: " + error.message);
       setIsUploading(false);
       setFileName(null);
+    }
+  };
+
+  const handleSummarize = async () => {
+    if (!fileName || isLoading) return;
+
+    setIsLoading(true);
+    setMessages((prev) => [
+      ...prev,
+      { role: "user", content: "문서 전체를 요약해줘." },
+      { role: "bot", content: "문서 전체 내용을 분석하여 요약 중입니다..." },
+    ]);
+
+    try {
+      const response = await fetch(`${API_URL}/summarize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename: fileName }),
+      });
+
+      if (!response.ok) {
+        throw new Error("요약 요청 실패");
+      }
+
+      const data = await response.json();
+
+      // 봇 메시지 업데이트
+      setMessages((prev) => {
+        const newMessages = [...prev];
+        const lastMsgIndex = newMessages.length - 1;
+        newMessages[lastMsgIndex] = {
+          role: "bot",
+          content: `📝 **문서 요약 결과:**\n\n${data.summary}`,
+        };
+        return newMessages;
+      });
+    } catch (error) {
+      setMessages((prev) => {
+        const newMessages = [...prev];
+        newMessages[newMessages.length - 1].content =
+          "❌ 요약 중 오류가 발생했습니다. (문서가 너무 길거나 서버 문제일 수 있습니다)";
+        return newMessages;
+      });
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -186,7 +232,17 @@ export default function Home() {
           </div>
         </div>
 
-        <div>
+        <div className="flex gap-2">
+          {fileName && (
+            <button
+              onClick={handleSummarize}
+              disabled={isLoading || isUploading}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white border border-slate-200 hover:border-indigo-500 hover:text-indigo-600 text-slate-600 hover:shadow-md cursor-pointer active:scale-95 transition-all duration-200 text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <FileText className="w-4 h-4" />
+              <span>전체 요약</span>
+            </button>
+          )}
           <input
             type="file"
             accept=".pdf,.txt,.md"
@@ -263,10 +319,7 @@ export default function Home() {
                   }`}
                 >
                   {/* 생각 중 애니메이션 */}
-                  {msg.role === "bot" &&
-                  msg.content === "" &&
-                  isLoading &&
-                  idx === messages.length - 1 ? (
+                  {msg.role === "bot" && msg.content === "" ? (
                     <div className="flex items-center gap-1 h-6">
                       <span className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
                       <span className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce [animation-delay:-0.15s]"></span>

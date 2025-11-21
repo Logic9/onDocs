@@ -15,6 +15,17 @@ from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.retrievers import EnsembleRetriever
 from langchain_community.retrievers import BM25Retriever
+from langchain_community.cache import InMemoryCache
+from langchain.globals import set_llm_cache
+# 메모리 내 캐시 활성화
+set_llm_cache(InMemoryCache())
+
+from langchain_core.prompts import PromptTemplate
+from langchain.chains.summarize import load_summarize_chain
+from langchain.docstore.document import Document
+from sklearn.cluster import KMeans
+import numpy as np
+
 
 # --- 설정 ---
 UPLOAD_DIR = "./temp"
@@ -79,6 +90,9 @@ class ChatRequest(BaseModel):
     question: str
     history: List[Message] = []
 
+class SummarizeRequest(BaseModel):
+    filename: str
+
 # --- 백그라운드 작업 함수 ---
 def process_document(file_path: str, file_ext: str, filename: str):
     global vector_store, bm25_retriever, processing_status
@@ -98,8 +112,8 @@ def process_document(file_path: str, file_ext: str, filename: str):
         
         # 텍스트 분할 설정
         text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=800, 
-            chunk_overlap=100,
+            chunk_size=500, 
+            chunk_overlap=50,
             separators=["\n", "\n\n", " ", ""] 
         )
         splits = text_splitter.split_documents(docs)
@@ -108,7 +122,7 @@ def process_document(file_path: str, file_ext: str, filename: str):
         vector_store = FAISS.from_documents(documents=splits, embedding=EMBEDDING_MODEL)
         
         bm25_retriever = BM25Retriever.from_documents(splits)
-        bm25_retriever.k = 5  
+        bm25_retriever.k = 3
         
         processing_status[filename] = "completed"
         
@@ -150,6 +164,85 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
     
     return {"message": "Upload started", "filename": file.filename}
 
+@app.post("/summarize")
+async def summarize_document(request: SummarizeRequest):
+    filename = request.filename
+    file_path = None
+    
+    for f in os.listdir(UPLOAD_DIR):
+        if f.endswith(filename):
+            file_path = os.path.join(UPLOAD_DIR, f)
+            break
+            
+    if not file_path:
+        raise HTTPException(status_code=404, detail="파일을 찾을 수 없습니다.")
+
+    try:
+        # 문서 로드 & 분할
+        ext = os.path.splitext(filename)[1].lower()
+        if ext == ".pdf":
+            loader = PyPDFLoader(file_path)
+        else:
+            loader = TextLoader(file_path, encoding="utf-8")
+        
+        raw_docs = loader.load()
+        
+        # 문서를 1000자 단위로 큼직하게 자름
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000, chunk_overlap=200
+        )
+        docs = text_splitter.split_documents(raw_docs)
+        
+        # 내용이 많을 때만 '클러스터링' 적용
+        if len(docs) > 15:
+            print(f"⚡ 클러스터링 요약 시작 (전체 {len(docs)}개 중 핵심 추출)")
+            
+            vectors = await EMBEDDING_MODEL.aembed_documents([d.page_content for d in docs])
+            
+            num_clusters = max(5, int(len(docs) * 0.2)) 
+            kmeans = KMeans(n_clusters=num_clusters, random_state=42).fit(vectors)
+            
+            closest_indices = []
+            for i in range(num_clusters):
+                distances = np.linalg.norm(vectors - kmeans.cluster_centers_[i], axis=1)
+                closest_index = np.argmin(distances)
+                closest_indices.append(closest_index)
+            
+            selected_indices = sorted(closest_indices)
+            selected_docs = [docs[i] for i in selected_indices]
+            print(f"✅ {len(docs)}개 중 {len(selected_docs)}개의 핵심 문단만 선별 완료")
+        else:
+            selected_docs = docs
+
+        # 선별된 내용으로 요약 수행
+        summary_llm = ChatOllama(
+            model=MODEL_NAME, 
+            temperature=0,
+            num_ctx=8192, 
+            keep_alive="60m"
+        )
+        
+        summary_template = """
+        다음 텍스트의 핵심 내용을 파악하여 한국어로 요약해 주세요.
+        내용의 흐름이 자연스럽게 이어지도록 3~5문단으로 정리해 주세요.
+        
+        [텍스트]:
+        "{text}"
+        
+        [전체 요약]:"""
+        SUMMARY_PROMPT = PromptTemplate.from_template(summary_template)
+        
+        # prompt 파라미터에 한국어 템플릿 전달
+        chain = load_summarize_chain(summary_llm, chain_type="stuff", prompt=SUMMARY_PROMPT)
+        
+        summary_result = await chain.ainvoke(selected_docs)
+        
+        return {"summary": summary_result["output_text"]}
+
+    except Exception as e:
+        print(f"요약 실패: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/chat")
 async def chat(request: ChatRequest):
     global vector_store, bm25_retriever
@@ -160,14 +253,10 @@ async def chat(request: ChatRequest):
             return
     
         try:
-            # MMR 검색 설정
+            # 일반 유사도 검색 사용
             faiss_retriever = vector_store.as_retriever(
-                search_type="mmr",
-                search_kwargs={
-                    "k": 7,           
-                    "fetch_k": 20,     
-                    "lambda_mult": 0.5 
-                }
+                search_type="similarity",
+                search_kwargs={"k": 4} 
             )
 
             ensemble_retriever = EnsembleRetriever(
@@ -192,7 +281,7 @@ async def chat(request: ChatRequest):
             {context_text}
             """
             
-            llm = ChatOllama(model=MODEL_NAME, temperature=0, num_ctx=4096, keep_alive="60m")
+            llm = ChatOllama(model=MODEL_NAME, temperature=0, num_ctx=2048, keep_alive="60m")
 
             full_messages = [("system", system_prompt)] 
             
