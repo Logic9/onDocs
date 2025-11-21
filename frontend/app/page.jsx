@@ -106,8 +106,8 @@ export default function Home() {
     setIsLoading(true);
     setMessages((prev) => [
       ...prev,
-      { role: "user", content: "문서 전체를 요약해줘." },
-      { role: "bot", content: "문서 전체 내용을 분석하여 요약 중입니다..." },
+      { role: "user", content: "📄 문서 전체를 요약해줘." },
+      { role: "bot", content: "__SUMMARIZING__" },
     ]);
 
     try {
@@ -318,20 +318,33 @@ export default function Home() {
                       : "bg-white border border-slate-100 text-slate-800 rounded-2xl rounded-tl-sm"
                   }`}
                 >
-                  {/* 생각 중 애니메이션 */}
+                  {/* 생각 중 애니메이션 (일반 채팅)*/}
                   {msg.role === "bot" && msg.content === "" ? (
                     <div className="flex items-center gap-1 h-6">
                       <span className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
                       <span className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
                       <span className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce"></span>
                     </div>
-                  ) : msg.role === "bot" ? (
+                  ) : /* 요약 전용 애니메이션 */
+                  msg.role === "bot" && msg.content === "__SUMMARIZING__" ? (
+                    <div className="flex items-center gap-3 text-indigo-600 py-1">
+                      <div className="relative">
+                        <FileText className="w-5 h-5" />
+                        <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-indigo-500 rounded-full animate-ping opacity-75"></span>
+                      </div>
+                      <span className="font-medium animate-pulse">
+                        전체 문서를 분석하고 있습니다...
+                      </span>
+                    </div>
+                  ) : /* 일반 텍스트 메시지 (봇) */
+                  msg.role === "bot" ? (
                     <div className="prose prose-sm max-w-none prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-li:my-0 prose-strong:text-indigo-600 prose-strong:font-bold prose-pre:bg-slate-100 prose-pre:text-slate-700 prose-pre:p-2 prose-pre:rounded-lg">
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>
                         {msg.content}
                       </ReactMarkdown>
                     </div>
                   ) : (
+                    /* 사용자 메시지 */
                     <div className="whitespace-pre-wrap">{msg.content}</div>
                   )}
                 </div>

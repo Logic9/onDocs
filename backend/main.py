@@ -195,7 +195,7 @@ async def summarize_document(request: SummarizeRequest):
         
         # 내용이 많을 때만 '클러스터링' 적용
         if len(docs) > 15:
-            print(f"⚡ 클러스터링 요약 시작 (전체 {len(docs)}개 중 핵심 추출)")
+            print(f"클러스터링 요약 시작 (전체 {len(docs)}개 중 핵심 추출)")
             
             vectors = await EMBEDDING_MODEL.aembed_documents([d.page_content for d in docs])
             
@@ -210,7 +210,7 @@ async def summarize_document(request: SummarizeRequest):
             
             selected_indices = sorted(closest_indices)
             selected_docs = [docs[i] for i in selected_indices]
-            print(f"✅ {len(docs)}개 중 {len(selected_docs)}개의 핵심 문단만 선별 완료")
+            print(f"{len(docs)}개 중 {len(selected_docs)}개의 핵심 문단만 선별 완료")
         else:
             selected_docs = docs
 
