@@ -40,7 +40,7 @@ export default function Home() {
         behavior: "smooth",
       });
     }
-  }, [messages, isLoading]); // isLoading이 바뀔 때도 스크롤 조정
+  }, [messages, isLoading]);
 
   const checkStatus = async (filename) => {
     try {
@@ -107,7 +107,7 @@ export default function Home() {
     setMessages((prev) => [
       ...prev,
       { role: "user", content: "📄 문서 전체를 요약해줘." },
-      { role: "bot", content: "__SUMMARIZING__" },
+      { role: "bot", content: "" },
     ]);
 
     try {
@@ -117,27 +117,33 @@ export default function Home() {
         body: JSON.stringify({ filename: fileName }),
       });
 
-      if (!response.ok) {
-        throw new Error("요약 요청 실패");
+      if (!response.body) return;
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let done = false;
+
+      while (!done) {
+        const { value, done: doneReading } = await reader.read();
+        done = doneReading;
+        const chunkValue = decoder.decode(value, { stream: true });
+
+        setMessages((prev) => {
+          const newMessages = [...prev];
+          const lastMsgIndex = newMessages.length - 1;
+
+          const lastMessage = { ...newMessages[lastMsgIndex] };
+          lastMessage.content += chunkValue;
+
+          newMessages[lastMsgIndex] = lastMessage;
+          return newMessages;
+        });
       }
-
-      const data = await response.json();
-
-      // 봇 메시지 업데이트
-      setMessages((prev) => {
-        const newMessages = [...prev];
-        const lastMsgIndex = newMessages.length - 1;
-        newMessages[lastMsgIndex] = {
-          role: "bot",
-          content: `📝 **문서 요약 결과:**\n\n${data.summary}`,
-        };
-        return newMessages;
-      });
     } catch (error) {
       setMessages((prev) => {
         const newMessages = [...prev];
         newMessages[newMessages.length - 1].content =
-          "❌ 요약 중 오류가 발생했습니다. (문서가 너무 길거나 서버 문제일 수 있습니다)";
+          "❌ 요약 중 오류가 발생했습니다.";
         return newMessages;
       });
     } finally {
@@ -160,19 +166,15 @@ export default function Home() {
     setMessages((prev) => [
       ...prev,
       { role: "user", content: userMessage },
-      { role: "bot", content: "" }, // 일단 빈 내용으로 생성 (여기서 애니메이션 표시)
+      { role: "bot", content: "" },
     ]);
     setIsLoading(true);
 
     try {
-      // 대화 기록을 구성: 첫 메시지 제외하고 모든 메시지를 전송
-      const conversationHistory = messages
-        .slice(1) // 첫 메시지 (onDocs AI입니다)는 제외
-        .map((msg) => ({
-          // 백엔드의 Message 모델(role: assistant/human)에 맞게 매핑
-          role: msg.role === "bot" ? "assistant" : "human",
-          content: msg.content,
-        }));
+      const conversationHistory = messages.slice(1).map((msg) => ({
+        role: msg.role === "bot" ? "assistant" : "human",
+        content: msg.content,
+      }));
 
       const response = await fetch(`${API_URL}/chat`, {
         method: "POST",
