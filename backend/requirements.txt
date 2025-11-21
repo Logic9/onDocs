@@ -2,8 +2,6 @@ fastapi
 uvicorn
 pydantic
 python-multipart
-shutil
-uuid
 numpy
 scikit-learn
 kiwipiepy
@@ -16,7 +14,8 @@ langchain_core
 langchain_text_splitters
 huggingface-hub
 faiss-cpu
-
-# 아래는 선택적으로 필요할 수 있음 (환경에 따라)
-# torch
-# transformers
+torch
+transformers
+onnx
+onnxruntime
+onnxscript

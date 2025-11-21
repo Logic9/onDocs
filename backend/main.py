@@ -1,7 +1,6 @@
 import os
-import shutil
 import uuid
-import re
+import time
 from typing import List, Dict
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
@@ -9,7 +8,6 @@ from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-# --- LangChain & AI Imports ---
 from langchain_ollama import ChatOllama
 from langchain_huggingface import HuggingFaceEmbeddings 
 from langchain_community.vectorstores import FAISS
@@ -26,19 +24,22 @@ from kiwipiepy import Kiwi
 from sklearn.cluster import KMeans
 import numpy as np
 import pymupdf4llm 
+import torch
 
+# 캐시 설정
 set_llm_cache(InMemoryCache())
 
-# --- 설정 ---
 UPLOAD_DIR = "./temp"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 MODEL_NAME = "gemma3n:e2b" 
 
+# 임베딩 설정
+torch.set_num_threads(4) 
 EMBEDDING_MODEL = HuggingFaceEmbeddings(
     model_name="jhgan/ko-sroberta-multitask",
     model_kwargs={'device': 'cpu'}, 
-    encode_kwargs={'normalize_embeddings': True, 'batch_size': 16} 
+    encode_kwargs={'normalize_embeddings': True, 'batch_size': 1}
 )
 
 kiwi = Kiwi()
@@ -77,30 +78,30 @@ def process_document(file_path: str, file_ext: str, filename: str):
     
     try:
         processing_status[filename] = "processing"
-        
         raw_docs = []
         
+        CHUNK_SIZE = 1000
+        CHUNK_OVERLAP = 200
+
         if file_ext == ".pdf": 
             md_text = pymupdf4llm.to_markdown(file_path)
             raw_docs = [Document(page_content=md_text, metadata={"source": file_path})]
-            text_splitter = MarkdownTextSplitter(chunk_size=1200, chunk_overlap=300)
-            
+            text_splitter = MarkdownTextSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
         elif file_ext in [".txt", ".md"]: 
             loader = TextLoader(file_path, encoding="utf-8")
             raw_docs = loader.load()
-            text_splitter = RecursiveCharacterTextSplitter(chunk_size=1200, chunk_overlap=300)
+            text_splitter = RecursiveCharacterTextSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
         else:
             processing_status[filename] = "failed"
             return
 
         splits = text_splitter.split_documents(raw_docs)
-
         if len(splits) > 0:
             LATEST_DOC_HEADER = splits[0].page_content
                    
         vector_store = FAISS.from_documents(documents=splits, embedding=EMBEDDING_MODEL)
         bm25_retriever = BM25Retriever.from_documents(splits, preprocess_func=korean_tokenizer)
-        bm25_retriever.k = 5 
+        bm25_retriever.k = 4
         
         processing_status[filename] = "completed"
         
@@ -126,6 +127,7 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
     
     try:
         with open(file_path, "wb") as buffer:
+            import shutil
             shutil.copyfileobj(file.file, buffer)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"File save failed: {str(e)}")
@@ -136,7 +138,6 @@ async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File
 
     processing_status[file.filename] = "pending"
     background_tasks.add_task(process_document, file_path, file_ext, file.filename)
-    
     return {"message": "Upload started", "filename": file.filename}
 
 @app.post("/summarize")
@@ -151,17 +152,17 @@ async def summarize_document(request: SummarizeRequest):
 
     try:
         ext = os.path.splitext(filename)[1].lower()
+        chunk_sum = 1500
         if ext == ".pdf": 
             md_text = pymupdf4llm.to_markdown(file_path)
             raw_docs = [Document(page_content=md_text, metadata={"source": file_path})]
-            text_splitter = MarkdownTextSplitter(chunk_size=2000, chunk_overlap=200)
+            text_splitter = MarkdownTextSplitter(chunk_size=chunk_sum, chunk_overlap=200)
         else: 
             loader = TextLoader(file_path, encoding="utf-8")
             raw_docs = loader.load()
-            text_splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=200)
+            text_splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_sum, chunk_overlap=200)
             
         docs = text_splitter.split_documents(raw_docs)
-        
         if len(docs) > 10:
             vectors = EMBEDDING_MODEL.embed_documents([d.page_content for d in docs])
             vectors = np.array(vectors)
@@ -176,18 +177,8 @@ async def summarize_document(request: SummarizeRequest):
         else:
             selected_docs = docs
 
-        summary_llm = ChatOllama(model=MODEL_NAME, temperature=0, num_ctx=4096)
-        
-        summary_template = """
-        [지시]
-        문서를 한국어로 3문단 이내로 요약해 줘.
-        표(Table)나 주요 일정(날짜)이 있다면 그 내용을 반드시 포함해서 정리해.
-        
-        [텍스트]
-        "{text}"
-        
-        [요약]
-        """
+        summary_llm = ChatOllama(model=MODEL_NAME, temperature=0, num_ctx=3072)
+        summary_template = """[지시] 문서를 한국어로 3문단 이내로 요약해.\n[텍스트]\n"{text}"\n[요약]"""
         SUMMARY_PROMPT = PromptTemplate.from_template(summary_template)
         chain = load_summarize_chain(summary_llm, chain_type="stuff", prompt=SUMMARY_PROMPT)
         
@@ -202,71 +193,72 @@ async def chat(request: ChatRequest):
     global vector_store, bm25_retriever, LATEST_DOC_HEADER
     
     async def generate():
+        t0 = time.time()
+        
         if not vector_store:
             yield "문서 분석이 완료되지 않았습니다."
             return
     
         try:
-            faiss_retriever = vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 5})
-            bm25_retriever.k = 5
+            # 검색 (Retrieval)
+            faiss_retriever = vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 4})
+            bm25_retriever.k = 4
             ensemble_retriever = EnsembleRetriever(
                 retrievers=[bm25_retriever, faiss_retriever],
-                weights=[0.2, 0.8] 
+                weights=[0.5, 0.5]
             )
             retrieved_docs = await ensemble_retriever.ainvoke(request.question)
             
-            top_docs = retrieved_docs[:2] 
+            top_docs = retrieved_docs[:4]
+            
+            print("\n🔍 [DEBUG] Retrieved Chunks:")
+            for i, doc in enumerate(top_docs):
+                print(f"--- Chunk {i+1} ---\n{doc.page_content[:100]}...\n")
 
-            # Header Injection
             combined_docs_content = []
             header_included = False
             for doc in top_docs:
                 if doc.page_content == LATEST_DOC_HEADER:
                     header_included = True
                 combined_docs_content.append(doc.page_content)
-            
             if not header_included and LATEST_DOC_HEADER:
                 combined_docs_content.insert(0, LATEST_DOC_HEADER)
-                print("📌 [System] Header 강제 주입됨")
 
-            context_text = "\n---\n".join(combined_docs_content)
-        
-            system_prompt = f"""
+            context_text = "\n\n====================\n".join(combined_docs_content)
+            
+            final_prompt = f"""
             [지시]
-            너는 문서를 정밀하게 분석하는 AI야. 아래 [문서 내용]을 보고 질문에 답해.
+            너는 아래 [참고 자료]에 있는 내용만을 사용하여 질문에 한국어로 답해라.
+            만약 [참고 자료]에 정답이 없다면, 절대 지어내지 말고 "문서에 해당 내용이 없습니다."라고 답해라.
             
-            [분석 핵심 규칙]
-            1. **레이블(Label) 매칭:** 사용자가 특정 정보를 물어보면, 문서에서 그 단어(키워드)를 먼저 찾아.
-               - 예: '공개 일자'를 물으면 -> 문서에서 '공개'라는 단어를 찾고 -> 그 **바로 옆이나 아래**에 있는 날짜를 답해.
-               - 예: '출원 일자'를 물으면 -> 문서에서 '출원'이라는 단어를 찾고 -> 그 근처의 날짜를 답해.
-            
-            2. **유사한 정보 구분:**
-               - 문서에 여러 개의 날짜나 이름이 섞여 있을 때, 질문한 키워드와 **물리적으로 가장 가까운** 값을 선택해야 해. 절대 추측하지 마.
-            
-            3. **동의어 처리:**
-               - '제출'='신청'='접수' (같은 의미로 해석)
-               - '마감'='종료'='까지'
-            
-            [문서 내용]
+            [참고 자료]
             {context_text}
+            
+            [질문]
+            {request.question}
+            
+            [답변]
             """
             
             llm = ChatOllama(
                 model=MODEL_NAME, 
                 temperature=0, 
-                num_ctx=4096, 
+                num_ctx=2048, 
                 num_thread=4,
                 keep_alive="60m"
             )
-
-            full_messages = [("system", system_prompt)] 
-            for msg in request.history[-2:]:
-                role_map = {'assistant': 'ai', 'human': 'human', 'user': 'human', 'system': 'system'}
-                full_messages.append((role_map.get(msg.role, 'human'), msg.content))
             
-            full_messages.append(("human", request.question))
+            full_messages = [("human", final_prompt)]
             
+            print(f"⏱️ [Perf] Sending to LLM... (Length: {len(final_prompt)} chars)")
+            
+            first_token_received = False
             async for chunk in llm.astream(full_messages):
+                if not first_token_received:
+                    t2 = time.time()
+                    print(f"⚡ [Perf] Time to First Token: {t2 - t0:.3f}s")
+                    first_token_received = True
+                
                 if chunk.content:
                     yield chunk.content
 
