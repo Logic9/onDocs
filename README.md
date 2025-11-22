@@ -11,15 +11,40 @@
 
 ## 🛠 Tech Stack
 
-- **Core AI:** Ollama (`gemma3n:e2b`)
-- **Backend:**
-  - FastAPI
-  - LangChain (langchain, langchain_ollama, langchain_huggingface, langchain_community, langchain_core, langchain_text_splitters)
-  - FAISS
+### Core AI
+
+- **Ollama** (`gemma3n:e2b`)
+
+### Backend
+
+- **Web Framework:** FastAPI, Uvicorn
+- **LangChain Ecosystem:**
+  - langchain, langchain-core, langchain-community
+  - langchain-ollama, langchain-huggingface
+  - langchain-text-splitters
+- **AI & Embeddings:**
+  - torch, transformers, huggingface-hub
   - HuggingFace Embeddings (`jhgan/ko-sroberta-multitask`)
-  - BM25Retriever
-  - Kiwi 형태소 분석기 (`kiwipiepy`)
-  - PyMuPDF4LLM (PDF → Markdown 변환)
-  - scikit-learn (KMeans 클러스터링)
-  - numpy
-- **Frontend:** Next.js, Tailwind CSS
+- **Vector Store:** FAISS (faiss-cpu)
+- **Retrieval:** BM25Retriever
+- **Clustering:** scikit-learn (KMeans)
+- **Text Processing:** numpy, kiwipiepy (Kiwi 형태소 분석기)
+- **PDF → Markdown:** PyMuPDF4LLM
+- **ONNX:** onnx, onnxruntime, onnxscript
+
+### Frontend
+
+- **Framework:** Next.js (v16), React (v19)
+- **Styling:** Tailwind CSS, @tailwindcss/typography
+- **Markdown Rendering:** react-markdown, remark-gfm
+- **Icons:** lucide-react
+- **HTTP Client:** axios
+
+### Dev Tools
+
+- **Lint:** ESLint, eslint-config-next
+- **Tailwind/PostCSS:** @tailwindcss/postcss, tailwindcss
+
+---
+
+> **onDocs**는 오픈소스 SW 경진대회를 위해 개발된, 완전 오프라인 기반의 문서 분석 AI 서비스입니다.
