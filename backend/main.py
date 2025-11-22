@@ -46,12 +46,17 @@ print(f"🚀 System Info: Using {NUM_THREADS} threads. Model: {MODEL_NAME}")
 # ---------------------------------------------------------
 # 임베딩 & 토크나이저 (ONNX 가속)
 # ---------------------------------------------------------
-
 def clean_text(text: str) -> str:
     text = re.sub(r"!\[.*?\]\(.*?\)", "", text)
     text = re.sub(r"\[(.*?)\]\(.*?\)", r"\1", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"\n{2,}", " <PARAGRAPH_BREAK> ", text)
+    text = re.sub(r"\s*\n\s*", " ", text) 
+    text = text.replace(" <PARAGRAPH_BREAK> ", "\n\n")
+    text = re.sub(r" +", " ", text)
+    
     return text.strip()
+
 
 class OnnxQuantizedEmbeddings(Embeddings):
     def __init__(self, model_dir: str = "./onnx_emb_model"):
@@ -173,68 +178,67 @@ UNIVERSAL_RISK_PATTERNS = [
     {
         "category": "권리 강탈",
         "risk_level": "High",
-        "reasoning": "사용자가 기여한 아이디어나 개선사항까지 공급자가 소유하려고 합니다. 통상적으로 개선사항은 기여자에게 귀속되어야 공정합니다.",
-        # "개선사항/아이디어" ... "갑/공급자" ... "소유/귀속" 패턴
-        "regex": r"(개선|발명|아이디어|2차|저작물|지적재산|노하우).{0,80}(갑|회사|공급자|을).{0,30}(귀속|소유|독점)"
+        "reasoning": "사용자가 기여한 아이디어나 지적재산권, 2차 저작물까지 공급자가 독점하려 합니다.",
+        "regex": r"(개선|발명|아이디어|지적재산|저작물|권리).{0,60}.(일체|갑|회사|발주사).{0,100}(귀속|소유권도\s*주장할\s*수\s*없)"
     },
     {
         "category": "불공정 면책",
         "risk_level": "High",
-        "reasoning": "공급자의 과실로 발생한 손해(데이터 손실 등)에 대해서도 책임을 지지 않겠다고 명시하고 있습니다.",
-        # "간접/특별/부수적 손해" ... "책임지지 않는다" or "데이터 손실" ... "책임 없음"
-        "regex": r"(간접|부수|특수|데이터|이익|수익|사업).{0,15}(손해|손실|배상|복구).{0,60}(책임.*(없|지.*않|면제|배제)|배상.*(없|않))"
+        "reasoning": "공급자의 명백한 과실이나 시스템 운영 미숙으로 인한 손해까지 책임을 회피하는 불공정 조항입니다.",
+        "regex": r"(간접|부수|특수|데이터|이익|수익|사업|운영|관리).{0,60}(손해|손실|배상|복구|기회).{0,100}(책임.*(없|지.*않|지.*아니|면제|배제|일체)|배상.*(없|않|아니))"
     },
     {
         "category": "일방적 해지",
         "risk_level": "High",
-        "reasoning": "사전 경고나 시정 기회(최고) 없이 즉시 계약을 해지할 수 있는 권한을 공급자만 갖고 있습니다.",
-        # "최고 없이" or "즉시" ... "해지"
-        "regex": r"(최고\s*없이|통지\s*없이|즉시|임의로|일방적으로).{0,40}(해지|해제|종료|중단)"
+        "reasoning": "상대방에게 시정할 기회(최고)를 주지 않고, 일방적인 판단으로 즉시 계약을 해지할 수 있는 독소 조항입니다.",
+        "regex": r"(최고\s*없이|통지\s*없이|즉시|임의로|일방적으로|사전.*협의\s*없이).{0,60}(해지|해제|종료|중단|파기)"
     },
     {
         "category": "과도한 위약금/제한",
         "risk_level": "Caution",
-        "reasoning": "법정 이율을 초과하는 연체료(월 2% 이상)나 환불 불가 조항이 포함되어 있어 금전적 부담이 큽니다.",
-        # 월 2% 이상, 환불 불가
-        "regex": r"(월\s*[2-9]%|연\s*(2[4-9]|[3-9]\d)%|환불.*(없|불가|불가능|되지)|반환.*(하지|않))"
+        "reasoning": "법정 이율을 초과하는 연체료나 정당한 사유 없는 환불 불가 조항으로 금전적 손해가 발생할 수 있습니다.",
+        "regex": r"(월\s*[2-9]%|연\s*(2[4-9]|[3-9]\d)%|환불.*(없|불가|불가능|되지)|반환.*(하지|않|아니))"
     },
     {
         "category": "자동 연장 함정",
         "risk_level": "Caution",
-        "reasoning": "계약 종료 의사를 명확히 밝히지 않으면 원하지 않아도 자동으로 계약이 연장될 수 있습니다.",
-        "regex": r"(이의|의사|통지).{0,40}(없|안|않).{0,40}(자동|연장|갱신|간주)"
+        "reasoning": "계약 종료 의사를 명확히 밝히지 않으면 원치 않는 계약이 자동으로 연장될 수 있습니다.",
+        "regex": r"(이의|의사|통지).{0,50}(없|안|않|아니).{0,50}(자동|연장|갱신|간주)"
     },
     {
         "category": "불공정 관할",
         "risk_level": "Caution",
-        "reasoning": "분쟁 발생 시 공급자의 주소지 관할 법원으로 지정되어 있어, 사용자(을)의 방어권 행사가 불편할 수 있습니다.",
-        "regex": r"(관할|법원).{0,50}(갑|본점|회사|공급자).{0,20}(소재지|지정)"
+        "reasoning": "분쟁 발생 시 공급자 주소지 관할 법원으로 지정되어 있어 방어권 행사가 불편할 수 있습니다.",
+        "regex": r"(관할|법원).{0,60}(갑|본점|회사|공급자).{0,30}(소재지|지정|따른다)"
     }
 ]
 
 def extract_risks(pages):
     risks = []
+    
     for p in pages:
         content = p.get("content", "")
-        paragraphs = content.split("\n\n")
+        paragraphs = content.split('\n\n')
         
         for para in paragraphs:
-            clean_line = para.strip()
-            if len(clean_line) < 10: continue 
+            para = para.strip()
+            if not para: continue
             
-            matched_categories = []
+            normalized_para = re.sub(r'[^가-힣a-zA-Z0-9\s]', '', para)
             
             for pattern in UNIVERSAL_RISK_PATTERNS:
-                if re.search(pattern["regex"], clean_line, re.IGNORECASE | re.DOTALL):
+                if re.search(pattern["regex"], normalized_para, re.IGNORECASE):
+                    
                     risks.append({
                         "page_number": p.get("page_number"), 
-                        "content": clean_line[:200],
-                        "full_content": clean_line,
+                        "content": para[:200], 
+                        "full_content": para,
                         "category": pattern["category"],
                         "risk_level": pattern["risk_level"],
                         "reasoning": pattern["reasoning"]
                     })
-                    break
+                    break 
+                
     return risks
 
 # ---------------------------------------------------------

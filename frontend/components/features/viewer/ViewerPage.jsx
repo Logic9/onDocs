@@ -15,7 +15,7 @@ const ViewerPage = memo(
       return riskResults
         .filter((r) => r.page_number === page.page_number)
         .map((r) => ({
-          clean: normalizeText(r.content),
+          clean: normalizeText(r.full_content),
           id: `risk-${r.page_number}-${normalizeText(r.content).slice(0, 30)}`,
         }));
     }, [riskResults, page.page_number]);
