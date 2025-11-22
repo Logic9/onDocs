@@ -1,21 +1,34 @@
+# Web Framework & API
 fastapi
 uvicorn
 pydantic
 python-multipart
-numpy
-scikit-learn
-kiwipiepy
-pymupdf4llm
+
+# LangChain Ecosystem
 langchain
-langchain_ollama
-langchain_huggingface
-langchain_community
-langchain_core
-langchain_text_splitters
-huggingface-hub
-faiss-cpu
+langchain-core
+langchain-community
+langchain-ollama
+langchain-huggingface
+langchain-text-splitters
+
+# AI Core & Transformers
 torch
 transformers
+huggingface-hub
+numpy
+scikit-learn
+
+# Vector Store (CPU version)
+faiss-cpu
+
+# ONNX Runtime & Optimization
 onnx
 onnxruntime
 onnxscript
+
+# Korean NLP & Text Processing
+kiwipiepy
+
+# PDF Processing
+pymupdf4llm
