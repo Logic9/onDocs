@@ -2,6 +2,9 @@ import os
 import uuid
 import re
 import multiprocessing
+import hashlib
+import time
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
@@ -32,14 +35,21 @@ import pymupdf4llm
 # 기본 설정
 # ---------------------------------------------------------
 
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
+BASE_DIR = Path(__file__).resolve().parent
+ONNX_EMB_DIR = BASE_DIR / "onnx_emb_model"
+
 set_llm_cache(InMemoryCache())
 UPLOAD_DIR = "./temp"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 MODEL_NAME = "gemma3n:e2b"
+SMALL_MODEL_NAME = "llama3.2:3b"
 MAX_CONTEXT_WINDOW = 8192
 NUM_CORES = multiprocessing.cpu_count()
-NUM_THREADS = max(2, NUM_CORES)
+NUM_THREADS = max(2, NUM_CORES)  # maximize threads for speed per user request
 
 print(f"🚀 System Info: Using {NUM_THREADS} threads. Model: {MODEL_NAME}")
 
@@ -58,13 +68,20 @@ def clean_text(text: str) -> str:
     return text.strip()
 
 
+STRICT_OFFLINE = os.getenv("ONDOCS_OFFLINE", "1") != "0"
+
+
 class OnnxQuantizedEmbeddings(Embeddings):
-    def __init__(self, model_dir: str = "./onnx_emb_model"):
+    def __init__(self, model_dir: str = str(ONNX_EMB_DIR)):
         if not os.path.exists(model_dir):
-            print("⚠️ ONNX model not found. Falling back to HuggingFace.")
-            from langchain_huggingface import HuggingFaceEmbeddings
-            self.fallback = HuggingFaceEmbeddings(model_name="jhgan/ko-sroberta-multitask")
-            return
+            msg = f"⚠️ ONNX model not found at {model_dir}. Provide offline model files before starting."
+            if STRICT_OFFLINE:
+                raise RuntimeError(msg)
+            else:
+                print(msg + " Falling back to HuggingFace model download (online).")
+                from langchain_huggingface import HuggingFaceEmbeddings
+                self.fallback = HuggingFaceEmbeddings(model_name="jhgan/ko-sroberta-multitask")
+                return
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_dir)
         sess_options = ort.SessionOptions()
@@ -79,6 +96,7 @@ class OnnxQuantizedEmbeddings(Embeddings):
         self.fallback = None
 
     def _embed(self, texts: List[str]) -> List[List[float]]:
+        if not texts: return []
         if self.fallback: return self.fallback.embed_documents(texts)
         inputs = self.tokenizer(texts, padding=True, truncation=True, max_length=512, return_tensors="np")
         onnx_inputs = { "input_ids": inputs["input_ids"].astype(np.int64), "attention_mask": inputs["attention_mask"].astype(np.int64) }
@@ -109,13 +127,22 @@ def korean_tokenizer(text: str) -> List[str]: return [token.form for token in ki
 # LLM 설정
 # ---------------------------------------------------------
 
-llm = ChatOllama(
+llm_large = ChatOllama(
     model=MODEL_NAME,
     temperature=0.1,
     num_ctx=MAX_CONTEXT_WINDOW,
     num_thread=NUM_THREADS,
     keep_alive="60m",
-    num_predict=2048, 
+    num_predict=128,  # tighter cap for faster streaming
+)
+
+llm_small = ChatOllama(
+    model=SMALL_MODEL_NAME,
+    temperature=0.1,
+    num_ctx=MAX_CONTEXT_WINDOW,
+    num_thread=NUM_THREADS,
+    keep_alive="60m",
+    num_predict=128,
 )
 
 app = FastAPI(title="onDocs AI")
@@ -127,14 +154,43 @@ processing_status = {}
 DOC_PAGES = []
 DOC_METADATA = {}
 RISK_CLAUSES = []
+CACHE = {}  # file_hash -> {"vector_store", "bm25", "pages", "meta", "risks"}
+START_TIMES = {}
+
+def _format_status(filename: str, status: str, progress: float, start_time: float, total_est: float, message: str = ""):
+    now = time.time()
+    elapsed = max(0.0, now - start_time)
+    eta = max(0.0, total_est - elapsed)
+    processing_status[filename] = {
+        "status": status,
+        "progress": round(progress, 3),
+        "elapsed_sec": round(elapsed, 2),
+        "eta_sec": round(eta, 2),
+        "message": message,
+        "total_est": total_est,
+        "start_time": start_time,
+    }
+
+def _update_status(filename: str, **kwargs):
+    current = processing_status.get(filename)
+    if not current: return
+    merged = {**current, **kwargs}
+    # 재계산
+    start_time = merged.get("start_time", time.time())
+    total_est = merged.get("total_est", 0.0)
+    now = time.time()
+    merged["elapsed_sec"] = round(max(0.0, now - start_time), 2)
+    merged["eta_sec"] = round(max(0.0, total_est - merged["elapsed_sec"]), 2)
+    processing_status[filename] = merged
 
 class ChatRequest(BaseModel):
     question: str
     history: List[Dict[str, str]] = []
+    model_preference: Optional[str] = None
 
 class SearchRequest(BaseModel):
     question: str
-    top_k: int = 5
+    top_k: int = 3
 
 # ---------------------------------------------------------
 # 메타데이터 & 독소 조항 로직 (Logic-Free, Regex-Based)
@@ -248,17 +304,46 @@ def extract_risks(pages):
 def process_document(file_path, file_ext, filename):
     global vector_store, bm25_retriever, processing_status, DOC_PAGES, RISK_CLAUSES, DOC_METADATA
     try:
-        processing_status[filename] = "processing"
         docs = []
+        start_time = time.time()
+        with open(file_path, "rb") as f:
+            file_bytes = f.read()
+        file_hash = hashlib.sha256(file_bytes).hexdigest()
+
+        file_size_mb = max(0.1, len(file_bytes) / (1024 * 1024))
+        estimated_speed = 1.5  # MB/s 가정
+        total_est = max(2.0, 2.0 + file_size_mb / estimated_speed)
+        START_TIMES[filename] = start_time
+        _format_status(filename, "processing", 0.05, start_time, total_est, "파일 준비 중")
+
+        if file_hash in CACHE:
+            cached = CACHE[file_hash]
+            vector_store = cached["vector_store"]
+            bm25_retriever = cached["bm25"]
+            DOC_PAGES = cached["pages"]
+            DOC_METADATA = cached["meta"]
+            RISK_CLAUSES = cached["risks"]
+            _format_status(filename, "completed", 1.0, start_time, total_est, "캐시에서 불러왔습니다")
+            print(f"✅ Cache hit: {filename}")
+            return
+
+        # 파일 내용 재사용을 위해 다시 저장
+        # (위에서 읽은 바이트를 활용해 텍스트 추출)
+        def _write_temp(data: bytes):
+            with open(file_path, "wb") as wf:
+                wf.write(data)
+        _write_temp(file_bytes)
         if file_ext == ".pdf":
             data = pymupdf4llm.to_markdown(file_path, page_chunks=True)
             DOC_PAGES = [{"page_number": d["metadata"]["page"], "content": clean_text(d["text"])} for d in data]
             for p in DOC_PAGES:
                 docs.append(Document(page_content=p["content"], metadata={"page_number": p["page_number"]}))
+            _update_status(filename, status="processing", progress=0.2, message="텍스트 추출 중", total_est=total_est, start_time=start_time)
         else:
             with open(file_path, "r", encoding="utf-8") as f: text = clean_text(f.read())
             DOC_PAGES = [{"page_number": 1, "content": text}]
             docs = [Document(page_content=text, metadata={"page_number": 1})]
+            _update_status(filename, status="processing", progress=0.2, message="텍스트 추출 중", total_est=total_est, start_time=start_time)
 
         # 메타데이터 추출 (앞부분 3000자)
         header_text = DOC_PAGES[0]["content"] if DOC_PAGES else ""
@@ -269,14 +354,28 @@ def process_document(file_path, file_ext, filename):
         RISK_CLAUSES = extract_risks(DOC_PAGES)
 
         # RAG 인덱싱
-        splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
-        splits = splitter.split_documents(docs)
+        _update_status(filename, status="processing", progress=0.4, message="문서 분할 중", total_est=total_est, start_time=start_time)
+        splitter = RecursiveCharacterTextSplitter(chunk_size=900, chunk_overlap=150)
+        splits = [d for d in splitter.split_documents(docs) if d.page_content.strip()]
+        if not splits:
+            print("⚠️ No content to index after splitting. Skipping indexing.")
+            _update_status(filename, status="failed", progress=0.0, message="분석할 텍스트가 없습니다", total_est=total_est, start_time=start_time)
+            return
 
+        _update_status(filename, status="processing", progress=0.6, message="색인 생성 중", total_est=total_est, start_time=start_time)
         vector_store = FAISS.from_documents(splits, EMBEDDING_MODEL)
         bm25_retriever = BM25Retriever.from_documents(splits, preprocess_func=korean_tokenizer)
         bm25_retriever.k = 10 
 
-        processing_status[filename] = "completed"
+        CACHE[file_hash] = {
+            "vector_store": vector_store,
+            "bm25": bm25_retriever,
+            "pages": DOC_PAGES,
+            "meta": DOC_METADATA,
+            "risks": RISK_CLAUSES,
+        }
+
+        _update_status(filename, status="completed", progress=1.0, message="완료", total_est=total_est, start_time=start_time)
         print(f"✅ Processed: {filename}")
         print(f"⚠️ Risks Found: {len(RISK_CLAUSES)}")
         
@@ -284,14 +383,26 @@ def process_document(file_path, file_ext, filename):
         print(f"❌ Error: {e}")
         import traceback
         traceback.print_exc()
-        processing_status[filename] = "failed"
+        _update_status(filename, status="failed", message="분석 오류 발생")
 
 # ---------------------------------------------------------
 # API 엔드포인트
 # ---------------------------------------------------------
 
 @app.get("/status/{filename}")
-def status(filename: str): return {"status": processing_status.get(filename, "unknown")}
+def status(filename: str):
+    info = processing_status.get(filename)
+    if not info: return {"status": "unknown"}
+    # 최신 ETA/경과 갱신
+    if info.get("start_time"):
+        now = time.time()
+        elapsed = max(0.0, now - info["start_time"])
+        total_est = info.get("total_est", elapsed + info.get("eta_sec", 0))
+        eta = max(0.0, total_est - elapsed)
+        info = {**info, "elapsed_sec": round(elapsed, 2), "eta_sec": round(eta, 2)}
+        processing_status[filename] = info
+    # start_time/total_est 내부 필드는 응답에서 제외
+    return {k: v for k, v in info.items() if k not in ["start_time", "total_est"]}
 
 @app.post("/upload")
 async def upload(bg_tasks: BackgroundTasks, file: UploadFile = File(...)):
@@ -386,11 +497,11 @@ async def chat(req: ChatRequest):
 """
 
         # RAG 검색
-        faiss = vector_store.as_retriever(search_kwargs={"k": 6})
+        faiss = vector_store.as_retriever(search_kwargs={"k": 4})
         ensemble = EnsembleRetriever(retrievers=[bm25_retriever, faiss], weights=[0.5, 0.5])
         
         docs = await ensemble.ainvoke(req.question)
-        final_docs = docs[:5] 
+        final_docs = docs[:3] 
         final_docs.sort(key=lambda x: x.metadata.get("page_number", 0))
         doc_context = "\n\n".join([f"[Page {d.metadata.get('page_number')}]: {d.page_content}" for d in final_docs])
 
@@ -412,8 +523,49 @@ user
 
 model
 """
-        async for chunk in llm.astream(prompt):
-            if chunk.content: yield chunk.content
+        # 모델 선택 우선순위: 사용자 지정 -> 자동 로직
+        pref = (req.model_preference or "").lower()
+        if pref == "speed":
+            chosen_llm = llm_small
+            chosen_name = SMALL_MODEL_NAME
+        elif pref == "accurate":
+            chosen_llm = llm_small  # accurate 요청 시 qwen 사용
+            chosen_name = "qwen2.5:3b"
+            try:
+                # 생성 전 준비된 클라이언트 사용을 위해 인스턴스화
+                from langchain_ollama import ChatOllama as _ChatOllama
+                chosen_llm = _ChatOllama(
+                    model=chosen_name,
+                    temperature=0.1,
+                    num_ctx=MAX_CONTEXT_WINDOW,
+                    num_thread=NUM_THREADS,
+                    keep_alive="60m",
+                    num_predict=128,
+                )
+            except Exception:
+                chosen_llm = llm_small
+        elif pref == "analysis":
+            chosen_llm = llm_large
+            chosen_name = MODEL_NAME
+        else:
+            total_chars = len(prompt)
+            use_small = (not is_risk_query) and (not is_summary_query) and total_chars < 3000
+            chosen_llm = llm_small if use_small else llm_large
+            chosen_name = SMALL_MODEL_NAME if use_small else MODEL_NAME
+
+        yield f"__MODEL__:{chosen_name}\n"
+
+        async for chunk in chosen_llm.astream(prompt):
+            text = getattr(chunk, "content", None) or getattr(chunk, "text", None)
+            if callable(text):
+                text = None
+            if isinstance(text, list):
+                text = "".join(text)
+            if not text:
+                continue
+            if not isinstance(text, str):
+                text = str(text)
+            yield text
 
     return StreamingResponse(gen(), media_type="text/event-stream")
 

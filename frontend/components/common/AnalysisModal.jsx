@@ -1,6 +1,16 @@
-import { Loader2, FileText } from "lucide-react";
+import { Loader2, FileText, Clock3 } from "lucide-react";
 
-const AnalysisModal = ({ status, fileName }) => {
+const formatTime = (sec) => {
+  if (sec == null || isNaN(sec)) return "-";
+  const s = Math.max(0, Math.round(sec));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}m ${r}s`;
+};
+
+const AnalysisModal = ({ status, fileName, progress = 0, etaSec, elapsedSec }) => {
+  const pct = Math.min(100, Math.max(0, Math.round(progress * 100)));
   return (
     <div className="fixed inset-0 z-60 bg-black/20 backdrop-blur-md flex items-center justify-center animate-in fade-in duration-300">
       <div className="bg-white/90 border border-white/50 shadow-2xl p-8 rounded-3xl max-w-sm w-full mx-4 relative overflow-hidden flex flex-col items-center text-center">
@@ -29,6 +39,21 @@ const AnalysisModal = ({ status, fileName }) => {
         <div className="flex items-center gap-2 px-4 py-2 bg-blue-50 rounded-full border border-blue-100">
           <Loader2 size={14} className="animate-spin text-blue-600" />
           <span className="text-xs font-bold text-blue-700">{status}</span>
+        </div>
+
+        <div className="w-full mt-5 space-y-2 text-left">
+          <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-blue-500 transition-all duration-300"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          <div className="flex items-center justify-between text-xs text-gray-600">
+            <span className="flex items-center gap-1 font-medium">
+              <Clock3 size={12} /> 경과 {formatTime(elapsedSec)}
+            </span>
+            <span className="text-gray-500">남음 {formatTime(etaSec)}</span>
+          </div>
         </div>
       </div>
     </div>

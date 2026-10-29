@@ -1,9 +1,4 @@
-temp/
-__pycache__/
-.env 
-node_modules/ 
-.DS_Store
-onnx_emb_model/
+
 
 # Local configuration, dependencies and generated files
 .DS_Store

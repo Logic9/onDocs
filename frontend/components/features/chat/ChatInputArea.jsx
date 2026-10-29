@@ -12,7 +12,17 @@ const ChatInputArea = ({
   searchResults,
   riskResults,
   onReferenceClick,
+  modelPreference,
+  setModelPreference,
+  selectedModel,
 }) => {
+  const options = [
+    { key: "auto", label: "자동선택" },
+    { key: "speed", label: "속도" },
+    { key: "accurate", label: "정확" },
+    { key: "analysis", label: "분석" },
+  ];
+
   return (
     <div className="shrink-0 px-6 pb-6 pt-2 bg-white border-t border-transparent z-40">
       <div className="max-w-3xl mx-auto relative flex flex-col gap-3">
@@ -66,6 +76,27 @@ const ChatInputArea = ({
             )}
           </div>
         )}
+
+        <div className="flex flex-wrap items-center gap-2">
+          {options.map((opt) => (
+            <button
+              key={opt.key}
+              onClick={() => setModelPreference(opt.key)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
+                modelPreference === opt.key
+                  ? "bg-blue-600 text-white border-blue-600 shadow-sm"
+                  : "bg-gray-50 text-gray-600 border-gray-200 hover:border-blue-200 hover:text-blue-700"
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+          {selectedModel && (
+            <span className="text-[11px] text-gray-500 ml-2">
+              사용 모델: {selectedModel}
+            </span>
+          )}
+        </div>
 
         <div className="bg-white rounded-2xl shadow-lg border border-gray-200 p-2 flex items-center gap-2 focus-within:ring-2 focus-within:ring-blue-100 transition-shadow">
           <button

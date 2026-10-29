@@ -5,6 +5,9 @@ export function useFileHandler() {
   const [isUploading, setIsUploading] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
+  const [progress, setProgress] = useState(0);
+  const [etaSec, setEtaSec] = useState(null);
+  const [elapsedSec, setElapsedSec] = useState(0);
   const [fileName, setFileName] = useState(null);
   const [pages, setPages] = useState([]);
   const [riskResults, setRiskResults] = useState([]);
@@ -16,9 +19,9 @@ export function useFileHandler() {
         `${API_URL}/status/${encodeURIComponent(filename)}`
       );
       const data = await res.json();
-      return data.status;
+      return data;
     } catch (e) {
-      return "unknown";
+      return { status: "unknown" };
     }
   };
 
@@ -46,11 +49,23 @@ export function useFileHandler() {
     }
   };
 
+  const formatTime = (sec) => {
+    if (sec == null || isNaN(sec)) return "-";
+    const s = Math.max(0, Math.round(sec));
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    return `${m}m ${r}s`;
+  };
+
   const uploadFile = async (file, { onStatusUpdate, onComplete, onFail }) => {
     if (!file) return;
     setIsUploading(true);
     setIsAnalyzing(true);
     setStatusMessage("업로드 중...");
+    setProgress(0);
+    setEtaSec(null);
+    setElapsedSec(0);
     setFileName(file.name);
     isAnalyzedRef.current = false;
     setPages([]);
@@ -79,8 +94,19 @@ export function useFileHandler() {
 
       setStatusMessage("AI 스캔 진행 중...");
       const interval = setInterval(async () => {
-        const status = await checkStatus(file.name);
-        if (status === "completed") {
+        const data = await checkStatus(file.name);
+        if (data?.status) {
+          setProgress(data.progress ?? 0);
+          setEtaSec(data.eta_sec ?? null);
+          setElapsedSec(data.elapsed_sec ?? 0);
+          if (data.status === "processing") {
+            const etaTxt = formatTime(data.eta_sec);
+            const elTxt = formatTime(data.elapsed_sec);
+            setStatusMessage(`AI 스캔 중... 경과 ${elTxt} / 남은 ${etaTxt}`);
+          }
+        }
+
+        if (data?.status === "completed") {
           clearInterval(interval);
           setStatusMessage("준비 완료");
           setIsAnalyzing(false);
@@ -91,7 +117,7 @@ export function useFileHandler() {
             if (onComplete) onComplete(loadedPages);
             isAnalyzedRef.current = true;
           }
-        } else if (status === "failed") {
+        } else if (data?.status === "failed") {
           clearInterval(interval);
           setStatusMessage("분석 실패");
           setIsAnalyzing(false);
@@ -113,6 +139,9 @@ export function useFileHandler() {
     isUploading,
     isAnalyzing,
     statusMessage,
+    progress,
+    etaSec,
+    elapsedSec,
     fileName,
     pages,
     riskResults,

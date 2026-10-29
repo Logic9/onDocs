@@ -21,6 +21,7 @@ scikit-learn
 
 # Vector Store (CPU version)
 faiss-cpu
+rank_bm25
 
 # ONNX Runtime & Optimization
 onnx

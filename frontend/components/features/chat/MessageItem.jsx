@@ -5,6 +5,12 @@ import { User, Sparkles } from "lucide-react";
 
 const MessageItem = memo(({ msg }) => {
   const isUser = msg.role === "user";
+  const formatSeconds = (ms) => {
+    if (ms == null) return null;
+    const sec = ms / 1000;
+    return `${sec.toFixed(1)}초`;
+  };
+
   return (
     <div
       className={`flex w-full ${isUser ? "justify-end" : "justify-start"} mb-4`}
@@ -63,6 +69,12 @@ const MessageItem = memo(({ msg }) => {
           >
             {msg.content}
           </ReactMarkdown>
+          {!isUser && msg.elapsedMs != null && (
+            <div className="text-[11px] text-gray-500 mt-2 flex items-center gap-1">
+              <span>⏱</span>
+              <span>{formatSeconds(msg.elapsedMs)}</span>
+            </div>
+          )}
         </div>
       </div>
     </div>

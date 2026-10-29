@@ -8,8 +8,8 @@ import {
 
 const Header = ({ fileName, statusMessage, showViewer, setShowViewer }) => {
   return (
-    <header className="h-16 px-6 border-b border-gray-200 bg-white flex items-center justify-between shrink-0 z-40 w-full fixed top-0 left-0 right-0">
-      <div className="flex items-center gap-2.5">
+    <header className="h-16 px-4 md:px-6 border-b border-gray-200 bg-white flex items-center justify-between shrink-0 z-40 w-full fixed top-0 left-0 right-0">
+      <div className="flex items-center gap-2.5 min-w-0">
         <div className="bg-blue-600 p-1.5 rounded-lg shadow-sm">
           <Cpu className="text-white" size={18} />
         </div>
@@ -22,22 +22,22 @@ const Header = ({ fileName, statusMessage, showViewer, setShowViewer }) => {
           </p>
         </div>
       </div>
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 min-w-0">
         <div
-          className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
+          className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all max-w-[220px] sm:max-w-[320px] min-w-0 ${
             fileName
               ? "bg-blue-50 text-blue-700 border border-blue-100"
               : "bg-gray-50 text-gray-500 border border-gray-200"
           }`}
         >
           {fileName ? <FileText size={14} /> : <Paperclip size={14} />}
-          <span className="truncate max-w-[120px] sm:max-w-[200px]">
-            {fileName || "문서 없음"}
-          </span>
+          <span className="truncate min-w-0">{fileName || "문서 없음"}</span>
           {statusMessage && (
             <>
               <div className="w-px h-3 bg-current opacity-20 mx-1" />
-              <span className="opacity-80">{statusMessage}</span>
+              <span className="opacity-80 truncate min-w-0 whitespace-nowrap">
+                {statusMessage}
+              </span>
             </>
           )}
         </div>

@@ -13,6 +13,8 @@ export function useChat() {
   const [isLoading, setIsLoading] = useState(false);
   const [thinkingStep, setThinkingStep] = useState(null);
   const [searchResults, setSearchResults] = useState([]);
+  const [modelPreference, setModelPreference] = useState("auto");
+  const [selectedModel, setSelectedModel] = useState(null);
 
   const addMessage = (role, content) => {
     setMessages((prev) => [...prev, { role, content }]);
@@ -21,6 +23,7 @@ export function useChat() {
   const sendMessage = async (fileName, onSearchComplete) => {
     if (!input.trim()) return;
     const userMessage = input.trim();
+    const startTime = performance.now();
     addMessage("user", userMessage);
     setInput("");
     setIsLoading(true);
@@ -53,7 +56,11 @@ export function useChat() {
       const res = await fetch(`${API_URL}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: userMessage, history: messages }),
+        body: JSON.stringify({
+          question: userMessage,
+          history: messages,
+          model_preference: modelPreference,
+        }),
       });
 
       if (!res.body) {
@@ -65,29 +72,54 @@ export function useChat() {
       const reader = res.body.getReader();
       const decoder = new TextDecoder("utf-8");
       let botContent = "";
-      let firstChunkReceived = false;
 
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
-        if (!firstChunkReceived) {
-          setThinkingStep(null);
-          firstChunkReceived = true;
+        let chunk = decoder.decode(value, { stream: true });
+
+        // 모델 정보 태그 처리
+        if (chunk.includes("__MODEL__:")) {
+          const parts = chunk.split("\n");
+          parts.forEach((p) => {
+            if (p.startsWith("__MODEL__:")) {
+              setSelectedModel(p.replace("__MODEL__:", "").trim());
+            }
+          });
+          chunk = parts.filter((p) => !p.startsWith("__MODEL__:")).join("\n");
         }
-        const chunk = decoder.decode(value, { stream: true });
+
         botContent += chunk;
 
         setMessages((prev) => {
           const newMsgs = [...prev];
           const lastMsg = newMsgs[newMsgs.length - 1];
           if (lastMsg.role === "bot") {
-            newMsgs[newMsgs.length - 1] = { ...lastMsg, content: botContent };
+            newMsgs[newMsgs.length - 1] = {
+              ...lastMsg,
+              content: botContent,
+              elapsedMs: lastMsg.elapsedMs ?? null,
+            };
             return newMsgs;
           } else {
-            return [...newMsgs, { role: "bot", content: botContent }];
+            return [
+              ...newMsgs,
+              { role: "bot", content: botContent, elapsedMs: null },
+            ];
           }
         });
       }
+
+      const elapsedMs = performance.now() - startTime;
+      setMessages((prev) => {
+        if (!prev.length) return prev;
+        const newMsgs = [...prev];
+        const lastMsg = newMsgs[newMsgs.length - 1];
+        if (lastMsg.role === "bot") {
+          newMsgs[newMsgs.length - 1] = { ...lastMsg, elapsedMs };
+        }
+        return newMsgs;
+      });
     } catch (error) {
       addMessage("bot", "오류가 발생했습니다.");
     } finally {
@@ -107,5 +139,8 @@ export function useChat() {
     setSearchResults,
     sendMessage,
     addMessage,
+    modelPreference,
+    setModelPreference,
+    selectedModel,
   };
 }

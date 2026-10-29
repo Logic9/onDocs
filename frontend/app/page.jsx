@@ -19,6 +19,9 @@ export default function Home() {
     isUploading,
     isAnalyzing,
     statusMessage,
+    progress,
+    etaSec,
+    elapsedSec,
     fileName,
     pages,
     riskResults,
@@ -37,6 +40,9 @@ export default function Home() {
     setSearchResults,
     sendMessage,
     addMessage,
+    modelPreference,
+    setModelPreference,
+    selectedModel,
   } = useChat();
 
   const [showViewer, setShowViewer] = useState(false);
@@ -169,7 +175,13 @@ export default function Home() {
       className="flex h-screen bg-white overflow-hidden font-sans text-gray-900 relative"
     >
       {isAnalyzing && (
-        <AnalysisModal status={statusMessage} fileName={fileName} />
+        <AnalysisModal
+          status={statusMessage}
+          fileName={fileName}
+          progress={progress}
+          etaSec={etaSec}
+          elapsedSec={elapsedSec}
+        />
       )}
 
       {isDragging && <DragDropOverlay />}
@@ -212,6 +224,9 @@ export default function Home() {
             searchResults={searchResults}
             riskResults={riskResults}
             onReferenceClick={handleClickReference}
+            modelPreference={modelPreference}
+            setModelPreference={setModelPreference}
+            selectedModel={selectedModel}
           />
         </div>
 

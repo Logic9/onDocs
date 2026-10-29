@@ -1,51 +1,26 @@
-# onDocs — 문서 근거 기반 분석·대화
+# onDocs · archive/offline
 
-PDF를 업로드하면 문서를 페이지별로 변환·검색하고, 위험 항목과 근거를 확인하며 질문하는 로컬 AI 문서 도구입니다. Next.js 프런트엔드와 FastAPI·검색 파이프라인이 분리되어 있습니다.
+로컬에서 발견한 별도 구현·이전 버전의 소스 스냅샷입니다. 원본 폴더는 보존하고 비밀값·사용자 데이터·의존성 사본·대용량 모델을 제외했습니다.
 
-## 주요 기능
+현재 대표 설명과 브랜치 관계는 [기본 브랜치 README](https://github.com/Logic9/onDocs/blob/main/README.md)를 참고하세요.
 
-- PDF 업로드·백그라운드 처리와 상태 확인
-- 페이지별 문서 뷰어, Markdown 표시와 근거 페이지 이동
-- 위험 항목 대시보드와 문서 검색
-- 문서 기반 채팅과 스트리밍 응답
+## 이 버전의 구성
 
-| 위치 | 역할 |
+| 경로 | 역할 / 실행 정보 |
 | --- | --- |
-| `frontend/app/` | Next.js 화면 진입점 |
-| `frontend/components/features/` | 뷰어·채팅·분석 UI |
-| `frontend/hooks/` | 파일 처리·채팅 상태 |
-| `frontend/utils/api.js` | 백엔드 호출 |
-| `backend/main.py` | 업로드·문서 처리·검색·대화 FastAPI |
-| `backend/export_onnx.py` | 임베딩 모델 ONNX 변환 |
-| `backend/requirements.txt` | Python 의존성 |
-| `docs/` | 프로젝트 보조 문서 |
+| `backend/` | 보관한 원본 구성 |
+| `frontend/` | 보관한 원본 구성 |
 
-백엔드는 PDF 처리, 한국어 토큰화, BM25·벡터 검색, FAISS·ONNX 임베딩과 로컬 모델 연동 코드를 포함합니다. 대표 API는 `/upload`, `/status/{filename}`, `/document/pages`, `/risks`, `/search`, `/chat`입니다.
+## 패키지에 선언된 명령
 
-## 실행 준비
+아래 명령은 원본 manifest 기준입니다. 실행·배포 성공을 검증했다는 의미는 아니며, 해당 폴더에서 의존성과 외부 설정을 먼저 준비해야 합니다.
 
-백엔드와 프런트엔드를 각각 실행합니다.
+### `frontend/package.json`
 
-```bash
-cd backend
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
-```
+- `npm run dev` → `next dev`
+- `npm run build` → `next build`
+- `npm run start` → `next start`
+- `npm run lint` → `eslint`
 
-```bash
-cd frontend
-npm install
-npm run dev
-```
 
-모델 서비스·모델 이름·ONNX 자산 경로와 프런트엔드 API 주소를 실제 코드에 맞춰 준비해야 합니다. 생성 모델과 임베딩 가중치는 별도 자산이며 소스만으로 자동 제공된다고 보장하지 않습니다. OS·Python·Torch 버전의 호환성도 확인하세요.
-
-## 브랜치와 데이터
-
-기본 브랜치는 기존 GitHub 구현입니다. 로컬의 변경 소스는 `archive/local-logic9`, 다른 오프라인 대응 스냅샷은 `archive/offline` 브랜치로 보관합니다. 가까운 사본을 중복 디렉터리·저장소로 만들지 않았습니다.
-
-업로드 문서·검색 인덱스·모델 가중치·가상환경·실제 비밀값은 코드와 분리합니다. 답변·위험 추출은 모델 결과이므로 원문 근거를 직접 확인해야 합니다. 인증·문서별 접근 격리·삭제·처리량 제한은 공개 서비스 운영 전에 별도로 검증해야 합니다.
-
-소스 출처·보관 브랜치·제외 범위는 [정리 기록](docs/SOURCE_MAP.md)에 있습니다.
+소스 출처와 비교 관계는 [정리 기록](docs/SOURCE_MAP.md)에 있습니다. 하드코딩 비밀값의 `REPLACE_WITH_LOCAL_SECRET` 표시는 실행 전에 로컬 설정으로 연결해야 합니다.

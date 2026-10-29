@@ -7,6 +7,7 @@
 | `archive/local-logic9` · `/` | 01_창업_서비스기획/onDocs/개발프로젝트/onDocs-main | 선택한 원본 소스 |
 | `archive/offline` · `frontend` | 01_창업_서비스기획/onDocs/개발프로젝트/onDocs-good/frontend | 9 changed files vs main frontend; do not treat as exact duplicate |
 | `archive/offline` · `backend` | 01_창업_서비스기획/onDocs/개발프로젝트/onDocs-good/backend | 4 changed files; offline backend |
+| `archive/zip-original` · `/` | 압축본에서 선별 추출 / business-ondocs-zip | Allowlisted source snapshot from ZIP; secrets/data/binaries excluded; original archive retained. |
 
 ## 업로드 범위
 
