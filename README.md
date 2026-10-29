@@ -1,51 +1,50 @@
-# onDocs — 문서 근거 기반 분석·대화
+# onDocs
 
-PDF를 업로드하면 문서를 페이지별로 변환·검색하고, 위험 항목과 근거를 확인하며 질문하는 로컬 AI 문서 도구입니다. Next.js 프런트엔드와 FastAPI·검색 파이프라인이 분리되어 있습니다.
+> 100% Offline, Edge AI Document Analyzer
 
-## 주요 기능
+**onDocs**는 인터넷 연결 없이 로컬 환경에서 보안 걱정 없이 문서를 분석하는 경량 AI 서비스입니다.
 
-- PDF 업로드·백그라운드 처리와 상태 확인
-- 페이지별 문서 뷰어, Markdown 표시와 근거 페이지 이동
-- 위험 항목 대시보드와 문서 검색
-- 문서 기반 채팅과 스트리밍 응답
+## 🏆 Project for Open Source SW Competition
 
-| 위치 | 역할 |
-| --- | --- |
-| `frontend/app/` | Next.js 화면 진입점 |
-| `frontend/components/features/` | 뷰어·채팅·분석 UI |
-| `frontend/hooks/` | 파일 처리·채팅 상태 |
-| `frontend/utils/api.js` | 백엔드 호출 |
-| `backend/main.py` | 업로드·문서 처리·검색·대화 FastAPI |
-| `backend/export_onnx.py` | 임베딩 모델 ONNX 변환 |
-| `backend/requirements.txt` | Python 의존성 |
-| `docs/` | 프로젝트 보조 문서 |
+- **Team:** 피나클
+- **Development Period:** 2025.11.20 ~ 2025.11.23
 
-백엔드는 PDF 처리, 한국어 토큰화, BM25·벡터 검색, FAISS·ONNX 임베딩과 로컬 모델 연동 코드를 포함합니다. 대표 API는 `/upload`, `/status/{filename}`, `/document/pages`, `/risks`, `/search`, `/chat`입니다.
+## 🛠 Tech Stack
 
-## 실행 준비
+### Core AI
 
-백엔드와 프런트엔드를 각각 실행합니다.
+- **Ollama** (`gemma3n:e2b`)
 
-```bash
-cd backend
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
-```
+### Backend
 
-```bash
-cd frontend
-npm install
-npm run dev
-```
+- **Web Framework:** FastAPI, Uvicorn
+- **LangChain Ecosystem:**
+  - langchain, langchain-core, langchain-community
+  - langchain-ollama, langchain-huggingface
+  - langchain-text-splitters
+- **AI & Embeddings:**
+  - torch, transformers, huggingface-hub
+  - HuggingFace Embeddings (`jhgan/ko-sroberta-multitask`)
+- **Vector Store:** FAISS (faiss-cpu)
+- **Retrieval:** BM25Retriever
+- **Clustering:** scikit-learn (KMeans)
+- **Text Processing:** numpy, kiwipiepy (Kiwi 형태소 분석기)
+- **PDF → Markdown:** PyMuPDF4LLM
+- **ONNX:** onnx, onnxruntime, onnxscript
 
-모델 서비스·모델 이름·ONNX 자산 경로와 프런트엔드 API 주소를 실제 코드에 맞춰 준비해야 합니다. 생성 모델과 임베딩 가중치는 별도 자산이며 소스만으로 자동 제공된다고 보장하지 않습니다. OS·Python·Torch 버전의 호환성도 확인하세요.
+### Frontend
 
-## 브랜치와 데이터
+- **Framework:** Next.js (v16), React (v19)
+- **Styling:** Tailwind CSS, @tailwindcss/typography
+- **Markdown Rendering:** react-markdown, remark-gfm
+- **Icons:** lucide-react
+- **HTTP Client:** axios
 
-기본 브랜치는 기존 GitHub 구현입니다. 로컬의 변경 소스는 `archive/local-logic9`, 다른 오프라인 대응 스냅샷은 `archive/offline` 브랜치로 보관합니다. 가까운 사본을 중복 디렉터리·저장소로 만들지 않았습니다.
+### Dev Tools
 
-업로드 문서·검색 인덱스·모델 가중치·가상환경·실제 비밀값은 코드와 분리합니다. 답변·위험 추출은 모델 결과이므로 원문 근거를 직접 확인해야 합니다. 인증·문서별 접근 격리·삭제·처리량 제한은 공개 서비스 운영 전에 별도로 검증해야 합니다.
+- **Lint:** ESLint, eslint-config-next
+- **Tailwind/PostCSS:** @tailwindcss/postcss, tailwindcss
 
-소스 출처·보관 브랜치·제외 범위는 [정리 기록](docs/SOURCE_MAP.md)에 있습니다.
+---
+
+> **onDocs**는 오픈소스 SW 경진대회를 위해 개발된, 완전 오프라인 기반의 문서 분석 AI 서비스입니다.

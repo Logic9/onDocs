@@ -8,15 +8,16 @@ python-multipart
 langchain
 langchain-core
 langchain-community
-langchain-ollama
 langchain-huggingface
 langchain-text-splitters
+ollama
 
 # AI Core & Transformers
-torch
+# Torch 2.6+는 macOS x86_64용 공식 휠이 없어 2.2.x 범위로 고정
+torch>=2.2,<2.6
 transformers
 huggingface-hub
-numpy
+numpy<2
 scikit-learn
 
 # Vector Store (CPU version)

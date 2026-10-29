@@ -2,6 +2,7 @@ import os
 import uuid
 import re
 import multiprocessing
+from itertools import zip_longest
 from typing import List, Dict, Any, Optional
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
@@ -10,18 +11,16 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from pydantic import BaseModel
 
-from langchain_ollama import ChatOllama
 from langchain_core.embeddings import Embeddings
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain.retrievers import EnsembleRetriever
 from langchain_community.retrievers import BM25Retriever
-from langchain_community.cache import InMemoryCache
-from langchain.globals import set_llm_cache
+# from langchain_core.globals import set_llm_cache
 
 from kiwipiepy import Kiwi
-from transformers import AutoTokenizer
+from tokenizers import Tokenizer
+import ollama
 
 import onnxruntime as ort
 import numpy as np
@@ -32,7 +31,8 @@ import pymupdf4llm
 # 기본 설정
 # ---------------------------------------------------------
 
-set_llm_cache(InMemoryCache())
+# LangChain caching은 비활성화 (optional dependency 로드 이슈 방지)
+# set_llm_cache(InMemoryCache())
 UPLOAD_DIR = "./temp"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
@@ -66,7 +66,16 @@ class OnnxQuantizedEmbeddings(Embeddings):
             self.fallback = HuggingFaceEmbeddings(model_name="jhgan/ko-sroberta-multitask")
             return
 
-        self.tokenizer = AutoTokenizer.from_pretrained(model_dir)
+        tokenizer_path = os.path.join(model_dir, "tokenizer.json")
+        if not os.path.exists(tokenizer_path):
+            print("⚠️ Tokenizer file missing. Falling back to HuggingFace.")
+            from langchain_huggingface import HuggingFaceEmbeddings
+            self.fallback = HuggingFaceEmbeddings(model_name="jhgan/ko-sroberta-multitask")
+            return
+
+        self.tokenizer = Tokenizer.from_file(tokenizer_path)
+        self.tokenizer.enable_truncation(max_length=512)
+        self.tokenizer.enable_padding(length=512)
         sess_options = ort.SessionOptions()
         try: sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         except: pass
@@ -80,12 +89,13 @@ class OnnxQuantizedEmbeddings(Embeddings):
 
     def _embed(self, texts: List[str]) -> List[List[float]]:
         if self.fallback: return self.fallback.embed_documents(texts)
-        inputs = self.tokenizer(texts, padding=True, truncation=True, max_length=512, return_tensors="np")
-        onnx_inputs = { "input_ids": inputs["input_ids"].astype(np.int64), "attention_mask": inputs["attention_mask"].astype(np.int64) }
+        encodings = self.tokenizer.encode_batch(texts)
+        input_ids = np.array([e.ids for e in encodings], dtype=np.int64)
+        attention_mask = np.array([e.attention_mask for e in encodings], dtype=np.int64)
+        onnx_inputs = {"input_ids": input_ids, "attention_mask": attention_mask}
         outputs = self.session.run(None, onnx_inputs)
         
         last_hidden_state = outputs[0]
-        attention_mask = inputs["attention_mask"]
         input_mask_expanded = np.expand_dims(attention_mask, -1)
         input_mask_expanded = np.broadcast_to(input_mask_expanded, last_hidden_state.shape).astype(float)
         sum_embeddings = np.sum(last_hidden_state * input_mask_expanded, axis=1)
@@ -109,7 +119,40 @@ def korean_tokenizer(text: str) -> List[str]: return [token.form for token in ki
 # LLM 설정
 # ---------------------------------------------------------
 
-llm = ChatOllama(
+
+class _StreamChunk:
+    def __init__(self, content: str): self.content = content
+
+
+class SimpleOllamaChat:
+    def __init__(self, model: str, temperature: float, num_ctx: int, num_thread: int, keep_alive: str, num_predict: int):
+        self.model = model
+        self.options = {
+            "temperature": temperature,
+            "num_ctx": num_ctx,
+            "num_thread": num_thread,
+            "keep_alive": keep_alive,
+            "num_predict": num_predict,
+        }
+        self.client = ollama.AsyncClient()
+
+    async def astream(self, prompt: str):
+        """Fetch one response and yield as a single chunk (avoids AsyncClient stream bug)."""
+        try:
+            resp = await self.client.chat(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                stream=False,
+                options=self.options,
+            )
+            content = resp.get("message", {}).get("content", "")
+            if content:
+                yield _StreamChunk(content)
+        except Exception as e:
+            yield _StreamChunk(f"[LLM 오류] {e}")
+
+
+llm = SimpleOllamaChat(
     model=MODEL_NAME,
     temperature=0.1,
     num_ctx=MAX_CONTEXT_WINDOW,
@@ -127,6 +170,45 @@ processing_status = {}
 DOC_PAGES = []
 DOC_METADATA = {}
 RISK_CLAUSES = []
+
+
+async def ensemble_retrieve(query: str, top_k: int = 5):
+    """Combine BM25 and FAISS results without relying on langchain_classic."""
+    if not vector_store or not bm25_retriever:
+        return []
+
+    faiss = vector_store.as_retriever(search_kwargs={"k": top_k})
+    bm_docs = await bm25_retriever.ainvoke(query)
+    faiss_docs = await faiss.ainvoke(query)
+
+    merged = []
+    seen = set()
+
+    def add_doc(doc):
+        key = (doc.metadata.get("page_number"), doc.page_content)
+        if key in seen:
+            return
+        seen.add(key)
+        merged.append(doc)
+
+    for bm_doc, faiss_doc in zip_longest(bm_docs, faiss_docs):
+        if bm_doc:
+            add_doc(bm_doc)
+        if len(merged) >= top_k:
+            break
+        if faiss_doc:
+            add_doc(faiss_doc)
+        if len(merged) >= top_k:
+            break
+
+    if len(merged) < top_k:
+        for extra in bm_docs + faiss_docs:
+            if len(merged) >= top_k:
+                break
+            add_doc(extra)
+
+    return merged[:top_k]
+
 
 class ChatRequest(BaseModel):
     question: str
@@ -311,9 +393,7 @@ def risks(): return {"results": RISK_CLAUSES}
 @app.post("/search")
 async def search(req: SearchRequest):
     if not vector_store: return {"results": []}
-    faiss = vector_store.as_retriever(search_kwargs={"k": req.top_k})
-    ensemble = EnsembleRetriever(retrievers=[bm25_retriever, faiss], weights=[0.5, 0.5])
-    docs = await ensemble.ainvoke(req.question)
+    docs = await ensemble_retrieve(req.question, top_k=req.top_k)
     return {"results": [{"page_number": d.metadata.get("page_number"), "content": d.page_content} for d in docs]}
 
 @app.post("/chat")
@@ -386,10 +466,7 @@ async def chat(req: ChatRequest):
 """
 
         # RAG 검색
-        faiss = vector_store.as_retriever(search_kwargs={"k": 6})
-        ensemble = EnsembleRetriever(retrievers=[bm25_retriever, faiss], weights=[0.5, 0.5])
-        
-        docs = await ensemble.ainvoke(req.question)
+        docs = await ensemble_retrieve(req.question, top_k=6)
         final_docs = docs[:5] 
         final_docs.sort(key=lambda x: x.metadata.get("page_number", 0))
         doc_context = "\n\n".join([f"[Page {d.metadata.get('page_number')}]: {d.page_content}" for d in final_docs])
