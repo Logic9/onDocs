@@ -1,50 +1,29 @@
-# onDocs
+# onDocs · archive/zip-original
 
-> 100% Offline, Edge AI Document Analyzer
+로컬에서 발견한 별도 구현·이전 버전의 소스 스냅샷입니다. 원본 폴더는 보존하고 비밀값·사용자 데이터·의존성 사본·대용량 모델을 제외했습니다.
 
-**onDocs**는 인터넷 연결 없이 로컬 환경에서 보안 걱정 없이 문서를 분석하는 경량 AI 서비스입니다.
+현재 대표 설명과 브랜치 관계는 [기본 브랜치 README](https://github.com/Logic9/onDocs/blob/main/README.md)를 참고하세요.
 
-## 🏆 Project for Open Source SW Competition
+## 이 버전의 구성
 
-- **Team:** 피나클
-- **Development Period:** 2025.11.20 ~ 2025.11.23
+| 경로 | 역할 / 실행 정보 |
+| --- | --- |
+| `.gitignore` | 보관한 원본 구성 |
+| `README.md` | 보관한 원본 구성 |
+| `backend/` | 보관한 원본 구성 |
+| `docs/` | 보관한 원본 구성 |
+| `frontend/` | 보관한 원본 구성 |
 
-## 🛠 Tech Stack
+## 패키지에 선언된 명령
 
-### Core AI
+아래 명령은 원본 manifest 기준입니다. 실행·배포 성공을 검증했다는 의미는 아니며, 해당 폴더에서 의존성과 외부 설정을 먼저 준비해야 합니다.
 
-- **Ollama** (`gemma3n:e2b`)
+### `frontend/package.json`
 
-### Backend
+- `npm run dev` → `next dev`
+- `npm run build` → `next build`
+- `npm run start` → `next start`
+- `npm run lint` → `eslint`
 
-- **Web Framework:** FastAPI, Uvicorn
-- **LangChain Ecosystem:**
-  - langchain, langchain-core, langchain-community
-  - langchain-ollama, langchain-huggingface
-  - langchain-text-splitters
-- **AI & Embeddings:**
-  - torch, transformers, huggingface-hub
-  - HuggingFace Embeddings (`jhgan/ko-sroberta-multitask`)
-- **Vector Store:** FAISS (faiss-cpu)
-- **Retrieval:** BM25Retriever
-- **Clustering:** scikit-learn (KMeans)
-- **Text Processing:** numpy, kiwipiepy (Kiwi 형태소 분석기)
-- **PDF → Markdown:** PyMuPDF4LLM
-- **ONNX:** onnx, onnxruntime, onnxscript
 
-### Frontend
-
-- **Framework:** Next.js (v16), React (v19)
-- **Styling:** Tailwind CSS, @tailwindcss/typography
-- **Markdown Rendering:** react-markdown, remark-gfm
-- **Icons:** lucide-react
-- **HTTP Client:** axios
-
-### Dev Tools
-
-- **Lint:** ESLint, eslint-config-next
-- **Tailwind/PostCSS:** @tailwindcss/postcss, tailwindcss
-
----
-
-> **onDocs**는 오픈소스 SW 경진대회를 위해 개발된, 완전 오프라인 기반의 문서 분석 AI 서비스입니다.
+소스 출처와 비교 관계는 [정리 기록](docs/SOURCE_MAP.md)에 있습니다. 하드코딩 비밀값의 `REPLACE_WITH_LOCAL_SECRET` 표시는 실행 전에 로컬 설정으로 연결해야 합니다.
